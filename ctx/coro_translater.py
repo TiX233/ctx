@@ -4,7 +4,10 @@ C 无栈协程 _async 源到源翻译器
 2026年6月27日
 
 用法：python coro_translater.py <input.c> [--line]
-输出：<input.c>.coro（UTF-8 编码）
+输出：
+  - <input>.c.coro.h   （结构体定义）
+  - <input>.c.coro     （其余翻译代码）
+若无 _async 函数则不会生成任何文件。
 """
 
 import sys
@@ -200,7 +203,6 @@ def extract_async_functions(source: str):
                 idx += 1
             rbrace = idx - 1
 
-            body = source[tokens[lbrace][2] : tokens[rbrace][3]]
             funcs.append({
                 "name": func_name,
                 "return_type": ret_type.strip(),
@@ -563,7 +565,7 @@ def variable_hoisting_body(func_info, tokens, source, param_names):
     return ''.join(result_parts), promoted
 
 # ================================================
-# 状态机生成（支持 #line）
+# 状态机生成（支持 #line，无变化，不再重复）
 # ================================================
 def get_line_indent(text, pos):
     line_start = text.rfind('\n', 0, pos) + 1
@@ -579,7 +581,6 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
         return body
     inner = body[lbrace+1 : rbrace]
 
-    # 正则匹配
     pattern_await = re.compile(
         r'(?:(\S+(?:\s*->\s*\w+)*)\s*=\s*)?'   # 可选的左值 =
         r'_await\s+(\w+)\s*\(([^)]*)\)\s*;'
@@ -639,9 +640,9 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
     out.append(f"_colable_{fname}_0:\n")
     out.append(indent + "// 初始化协程对象\n")
     out.append(indent + "co->father = father;\n")
-    out.append(indent + "co->father->son = co;\n")
+    out.append(indent + "if(father != NULL) co->father->son = co;\n")
     out.append(indent + f"// 配置状态机回调\n")
-    out.append(indent + f"_coro_init(co, _cocb_{fname});\n")
+    out.append(indent + f"ctx_coro_init(co, _cocb_{fname});\n")
     out.append("\n")
     out.append(indent + "/* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */\n")
     if param_names:
@@ -652,7 +653,6 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
     out.append(indent + "/* END: 根据实际情况生成不同的初始化参数和局部变量内容 */\n")
     out.append("\n")
 
-    # 插入 #line 指向用户代码起始行
     if enable_line:
         out.append(f'#line {body_start_line} "{source_file}"\n')
 
@@ -663,7 +663,6 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
         out.append(inner[last_end:start])
 
         orig_indent = get_line_indent(inner, start)
-        # 计算原始行号：body_start_line + inner 中到 start 之前的换行数
         line_offset = inner[:start].count('\n')
         line_num = body_start_line + line_offset
 
@@ -672,13 +671,12 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
 
         if typ == 'yield':
             out.append("\n" + orig_indent + "/* BEGIN: 检测到 _yield 关键字，替换 */\n")
-            out.append(orig_indent + "_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒\n")
+            out.append(orig_indent + "ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + "return ; // 出让\n")
             out.append(f"_colable_{fname}_{step}:\n")
             out.append(orig_indent + "/* END: 检测到 _yield 关键字，替换 */\n")
             if enable_line:
-                # 指向下一行
                 out.append(f'#line {line_num + 1} "{source_file}"\n')
             step += 1
 
@@ -763,7 +761,7 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
     out.append(inner[last_end:])
     out.append(f"_colable_{fname}_end:\n")
     out.append(indent + "// 唤醒父协程\n")
-    out.append(indent + "_coro_wake(father, 0); // 0 代表 0 tick 后唤醒\n")
+    out.append(indent + "ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒\n")
     out.append(indent + "co->step = 0; // 复位状态机\n")
     out.append(indent + "// free 操作交给父协程\n")
     out.append("}\n")
@@ -803,107 +801,179 @@ def split_params(params_str):
     return res
 
 # ================================================
-# 整体处理
+# 生成输出文件
 # ================================================
-def process_file(filepath, enable_line=False):
-    with open(filepath, 'r', encoding='utf-8') as f:
+def generate_output(input_file, enable_line):
+    with open(input_file, 'r', encoding='utf-8') as f:
         source = f.read()
     funcs, tokens = extract_async_functions(source)
 
-    outputs = []
+    if not funcs:
+        # print("No _async functions found. No output generated.")
+        return
+
+    base = os.path.splitext(input_file)[0]
+    h_file = base + '.c.coro.h'
+    c_file = base + '.c.coro'
+    src_basename = os.path.basename(input_file)
+
+    # 收集所有结构体定义
+    struct_defs = []
     for fn in funcs:
         param_pairs = split_params(fn['params'])
         param_names = [n for _, n in param_pairs]
 
-        # 计算原始函数体起始行号
-        body_start_line = source[:tokens[fn['lbrace']][2]].count('\n') + 1
+        # 分析变量提升
+        _, tokens = extract_async_functions(source)  # 重新获取 tokens (简单方式)
+        # 但 tokens 已在上方提取，这里重复调用会重新解析，但更快的方式是直接重用上面的 tokens。
+        # 我们重新组织：在外部只做一次提取，然后循环处理。但代码略长，为清晰我们在这里单独分析。
+        # 实际上上面的 funcs, tokens 已经包含所有函数，我们直接使用。
+        # 重新获取 tokens 因为上面循环中 tokens 变量被覆盖了？我们保存一个副本。
+        # 在这里简单重新获取 tokens，确保正确。
+    # 我们重构 process_file 逻辑，直接循环 funcs，但 tokens 需保留。上面的提取已得到 tokens，我们在循环内直接使用外部 tokens。
+    # 采用新方案：外部一次性提取，然后内部遍历 funcs。
 
+    # 调整：直接使用上面提取的 funcs 和 tokens（但 tokens 是局部变量，需在函数内传递）
+    # 我们把整体逻辑写在一个主函数中。
+
+def process(input_file, enable_line):
+    with open(input_file, 'r', encoding='utf-8') as f:
+        source = f.read()
+    funcs, tokens = extract_async_functions(source)
+
+    if not funcs:
+        # print("No _async functions detected. No files generated.")
+        return
+
+    base = os.path.splitext(input_file)[0]
+    h_file = base + '.c.coro.h'
+    c_file = base + '.c.coro'
+    src_basename = os.path.basename(input_file)
+
+    # 准备头文件内容
+    h_guard = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(base).upper()) + '_CORO_H_'
+    h_lines = []
+    h_lines.append(f"#ifndef {h_guard}")
+    h_lines.append(f"#define {h_guard}")
+    h_lines.append("")
+    h_lines.append("// Auto-generated private data structures for async coroutines")
+    h_lines.append("")
+
+    # 准备实现文件内容
+    c_lines = []
+    c_lines.append(f'#include "{os.path.basename(h_file)}"')
+    c_lines.append("")
+
+    for fn in funcs:
+        param_pairs = split_params(fn['params'])
+        param_names = [n for _, n in param_pairs]
+
+        # 重新计算 tokens 区间？使用外部 tokens 即可。
+        # 计算起始行号
+        body_start_line = source[:tokens[fn['lbrace']][2]].count('\n') + 1
+        end_line = source[:tokens[fn['rbrace']][3]].count('\n')
+
+        # 变量提升
         hoisted_body, promoted_dict = variable_hoisting_body(fn, tokens, source, param_names)
         promoted_vars = list(promoted_dict.values())
 
-        final_body = apply_state_machine(
-            hoisted_body, fn['name'], fn['return_type'], param_names,
-            body_start_line, enable_line, os.path.basename(filepath)
-        )
-
-        start_line = body_start_line
-        end_line = source[:tokens[fn['rbrace']][3]].count('\n')
-
-        lines = []
-        lines.append("/**")
-        lines.append(" * 识别到 _async 关键字")
-        lines.append(f" * 函数名称: {fn['name']}")
-        lines.append(f" * 返回类型: {fn['return_type']}")
-        lines.append(f" * 起始行号: {start_line}")
-        lines.append(f" * 终止行号: {end_line}")
-        lines.append(" * ")
-        lines.append(" * 参数: ")
-        if param_pairs:
-            for t,n in param_pairs:
-                lines.append(f" *       {t} {n}")
-        else:
-            lines.append(" *       (无)")
-        lines.append(" * ")
-        lines.append(" * 需要持久化的局部变量: ")
-        if promoted_vars:
-            for v in promoted_vars:
-                lines.append(f" *           {v.type} {v.name}")
-        else:
-            lines.append(" *           (无)")
-        lines.append(" */")
-        lines.append("")
-
+        # 生成结构体定义
         struct_name = f"_coval_{fn['name']}"
-        lines.append(f"struct {struct_name} {{")
-        lines.append("    // 参数")
+        struct_def = []
+        struct_def.append(f"struct {struct_name} {{")
+        struct_def.append("    // 参数")
         if param_pairs:
-            for t,n in param_pairs:
-                lines.append(f"    {t} {n};")
+            for t, n in param_pairs:
+                struct_def.append(f"    {t} {n};")
         else:
-            lines.append("    // (无)")
-        lines.append("")
-        lines.append("    // 需要持久化的局部变量")
+            struct_def.append("    // (无)")
+        struct_def.append("")
+        struct_def.append("    // 需要持久化的局部变量")
         if promoted_vars:
             for v in promoted_vars:
-                lines.append(f"    {v.type} {v.name};")
+                struct_def.append(f"    {v.type} {v.name};")
         else:
-            lines.append("    // (无)")
-        lines.append("")
+            struct_def.append("    // (无)")
+        struct_def.append("")
         ret_type = fn['return_type']
         if ret_type == 'void' or ret_type == '':
             core_t = 'int'
         else:
             core_t = ret_type
-        lines.append(f"    // 返回值")
-        lines.append(f"    {core_t} _coretval_;")
-        lines.append("};")
-        lines.append("")
+        struct_def.append(f"    // 返回值")
+        struct_def.append(f"    {core_t} _coretval_;")
+        struct_def.append("};")
+        h_lines.extend(struct_def)
+        h_lines.append("")
 
-        lines.append(f"void _cocb_{fn['name']}(struct coro_stu *co);")
-        lines.append("")
+        # 生成实现部分（注释、回调声明、翻译体、回调实现）
+        impl_lines = []
+        impl_lines.append("/**")
+        impl_lines.append(" * 识别到 _async 关键字")
+        impl_lines.append(f" * 函数名称: {fn['name']}")
+        impl_lines.append(f" * 返回类型: {fn['return_type']}")
+        impl_lines.append(f" * 起始行号: {body_start_line}")
+        impl_lines.append(f" * 终止行号: {end_line}")
+        impl_lines.append(" * ")
+        impl_lines.append(" * 参数: ")
+        if param_pairs:
+            for t, n in param_pairs:
+                impl_lines.append(f" *       {t} {n}")
+        else:
+            impl_lines.append(" *       (无)")
+        impl_lines.append(" * ")
+        impl_lines.append(" * 需要持久化的局部变量: ")
+        if promoted_vars:
+            for v in promoted_vars:
+                impl_lines.append(f" *           {v.type} {v.name}")
+        else:
+            impl_lines.append(" *           (无)")
+        impl_lines.append(" */")
+        impl_lines.append("")
 
-        lines.append("// ======== 第四部分：翻译后的函数体 ========")
+        impl_lines.append(f"void _cocb_{fn['name']}(struct coro_stu *co);")
+        impl_lines.append("")
+
+        impl_lines.append("// ======== 翻译后的函数体 ========")
         ret = 'void'
         param_str = fn['params']
         if param_str and param_str.strip() != 'void':
             new_params = f"struct coro_stu *father, struct coro_stu *co, {param_str}"
         else:
             new_params = "struct coro_stu *father, struct coro_stu *co"
-        lines.append(f"{ret} _co_{fn['name']}({new_params})")
-        lines.append(final_body)
-        lines.append("")
+        impl_lines.append(f"{ret} _co_{fn['name']}({new_params})")
+        # 函数声明
+        h_lines.append(f"void _co_{fn['name']}({new_params});\n")
 
-        lines.append(f"void _cocb_{fn['name']}(struct coro_stu *co) {{")
+        final_body = apply_state_machine(
+            hoisted_body, fn['name'], fn['return_type'], param_names,
+            body_start_line, enable_line, src_basename
+        )
+        impl_lines.append(final_body)
+        impl_lines.append("")
+
+        impl_lines.append(f"void _cocb_{fn['name']}(struct coro_stu *co) {{")
         if param_pairs:
-            args = ', '.join([f"((struct {struct_name} *)co->prv_data)->{n}" for _,n in param_pairs])
-            lines.append(f"    _co_{fn['name']}(co->father, co, {args});")
+            args = ', '.join([f"((struct {struct_name} *)co->prv_data)->{n}" for _, n in param_pairs])
+            impl_lines.append(f"    _co_{fn['name']}(co->father, co, {args});")
         else:
-            lines.append(f"    _co_{fn['name']}(co->father, co);")
-        lines.append("}")
+            impl_lines.append(f"    _co_{fn['name']}(co->father, co);")
+        impl_lines.append("}")
 
-        outputs.append('\n'.join(lines))
+        c_lines.extend(impl_lines)
+        c_lines.append("")
 
-    return '\n\n'.join(outputs)
+    # 头文件结尾
+    h_lines.append(f"#endif // {h_guard}\n")
+
+    # 写入文件
+    with open(h_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(h_lines))
+    with open(c_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(c_lines))
+
+    print(f"Generated: {h_file}")
+    print(f"Generated: {c_file}")
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
@@ -912,13 +982,4 @@ if __name__ == '__main__':
 
     input_file = sys.argv[1]
     enable_line = '--line' in sys.argv
-
-    output_file = os.path.splitext(input_file)[0] + '.c.coro'
-    try:
-        result = process_file(input_file, enable_line)
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(result)
-        print(f"Successfully generated {output_file}")
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    process(input_file, enable_line)

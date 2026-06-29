@@ -1,7 +1,6 @@
 #include "ctx.h"
 
 // 占位用
-struct _coval_wait_topic {uint8_t _coretval_;};
 struct _coval_wait_topic __wait_topic_prv_data__;
 struct coro_stu __son_placeholder__ = {.prv_data = &__wait_topic_prv_data__};
 
@@ -35,11 +34,11 @@ void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ti
     father->son = &__son_placeholder__;
 
     if(!ticks){ // 要求尽快执行
-        ltx_Topic_publish(&(co->alarm_next_run.topic));
+        ltx_Topic_publish(&(father->alarm_next_run.topic));
         return ;
     }
     // 将协程的闹钟设置在一段时间后
-    ltx_Alarm_add(&(co->alarm_next_run), ticks);
+    ltx_Alarm_add(&(father->alarm_next_run), ticks);
 }
 
 // async 函数调用 wait_topic 的话会被翻译脚本替换为调用这个
@@ -130,6 +129,9 @@ void ctx_coro_init(struct coro_stu *co, void (*callback)(struct coro_stu *co)){
 // 恢复某协程的执行
 // ticks 传入 0 则代表尽快唤醒
 void ctx_coro_wake(struct coro_stu *co, TickType_t ticks){
+    if(co == NULL){
+        return ;
+    }
     
     if(!ticks){ // 要求尽快执行
         ltx_Topic_publish(&(co->alarm_next_run.topic));
@@ -204,6 +206,7 @@ void ctx_mem_pool_init(void){
 }
 
 // 默认使用对象池分配，所以 size 参数此时无意义
+ltx_weak
 void* ctx_mem_alloc(uint32_t size){
 
     _LTX_IRQ_DISABLE();
@@ -215,13 +218,20 @@ void* ctx_mem_alloc(uint32_t size){
     }
 
     _LTX_IRQ_ENABLE();
+
+    if(block == NULL){
+        // todo
+        // 这里应该触发异常打印调用栈
+    }
     return block;
 }
 
-// 对于私有数据结构体，有可能超出单个对象池的尺寸，应该报错让用户提升内存池单个对象大小
+// 对于私有数据结构体，有可能超出单个块的尺寸，应该报错让用户提升内存池单个块大小
+ltx_weak
 void* ctx_mem_data_alloc(uint32_t size){
     if(size > __co_prvdata_pool_ctrl.block_size){
         // todo
+        // 这里应该触发异常打印调用栈
         return NULL;
     }
 
@@ -236,12 +246,18 @@ void* ctx_mem_data_alloc(uint32_t size){
     _LTX_IRQ_ENABLE();
     if(block == NULL){
         // todo
+        // 这里应该触发异常打印调用栈
     }
     return block;
 }
 
+ltx_weak
 void ctx_mem_free(void *ptr){
-    if (ptr == NULL) return;
+    if (ptr == NULL) return ;
+    // 判断是否在内存池范围内
+    if(ptr < __co_dynamic_obj_pool__ || ptr >= (__co_dynamic_obj_pool__ + CO_MAX_POOL_COUNT * sizeof(struct coro_stu))){
+        return ;
+    }
 
     _LTX_IRQ_DISABLE();
 
@@ -252,8 +268,13 @@ void ctx_mem_free(void *ptr){
     _LTX_IRQ_ENABLE();
 }
 
+ltx_weak
 void ctx_mem_data_free(void *ptr){
-    if (ptr == NULL) return;
+    if (ptr == NULL) return ;
+    // 判断是否在内存池范围内
+    if(ptr < __co_dynamic_prvdata_obj_pool__ || ptr >= (__co_dynamic_prvdata_obj_pool__ + CO_MAX_POOL_COUNT * CO_MAX_PRVDATA_SIZE)){
+        return ;
+    }
 
     _LTX_IRQ_DISABLE();
 

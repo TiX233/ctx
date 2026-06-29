@@ -26,8 +26,7 @@ LTX-V3 提供高效的事件响应且低资源消耗，还支持空闲休眠与 
 ```c
 #include "ctx.h"
 
-// 这里的 xxx 就是这个文件的名字，需要手动 include
-#include "xxx.c.coro"
+#include "xxx.h"
 
 _async void led_blink(int pin_num){
     for(int i = 3; i > 0; i --){
@@ -57,11 +56,16 @@ _async void my_task1(void){
         _await_static(&led2_obj) led_blink(2);
     }
 }
+
+// 这里的 xxx 就是这个文件的名字，需要手动 include
+#include "xxx.c.coro"
 ```
 
 你可以使用 `_async` 这个空宏标记需要被转译状态机的函数，其它 _async 函数可以使用 `_await` 来调用它  
 被翻译的函数可以是任意返回值和参数  
-被脚本翻译后的函数会保存在 `xxx.c.coro` 里面，所以需要手动 include 该文件在 _async 函数前
+被脚本翻译后的函数会保存在 `xxx.c.coro` 里面，所以需要手动在 `xxx.c` include 该文件在最后  
+以及在 `xxx.h` 里 include `xxx.c.coro.h`  
+
 
 不需要修改编译器或者安装编译器插件，即使您不使用 async，这段代码也会退化到同步阻塞，业务还可以无痛移植到有 os 的项目上
 
@@ -122,7 +126,7 @@ uint8_t wait_topic(struct ltx_Topic_stu *topic, TickType_t time_out);
 
 ## 六、注意事项
 
-请不要对以下函数标注 _async：
+**1、请不要对以下函数标注 _async：**
 
 * main 函数
 * 中断服务函数
@@ -131,3 +135,32 @@ uint8_t wait_topic(struct ltx_Topic_stu *topic, TickType_t time_out);
 因为这些函数都是被函数指针调用的，无法被翻译脚本和宏替换
 
 非 async 函数要启动一个 async 函数，需要使用 `_start_async(obj_ptr, func, ...)` 宏，被启动的 async 函数必须是静态创建的
+
+**2、内部块不允许重名局部变量！**
+
+例如：
+```c
+void xxx(void){
+    int a = 1;
+    {
+        int a = 9;
+        printf("aa: %d\n", a);
+    }
+
+    printf("a: %d\n", a);
+}
+```
+
+这种写法在 c 语言是合规的，但是我 **不允许** 出现这种情况  
+为什么 要使用 相同的名字？平常来讲这也会导致业务代码比较混乱  
+总之我不会让翻译器兼容这种情况，它们会都翻译成同一个变量，翻译结果大概如下：
+```c
+    _prv_data->a = 1;
+    {
+        _prv_data->a = 9;
+        printf("aa: %d\n", _prv_data->a);
+    }
+    printf("a: %d\n", _prv_data->a);
+```
+
+也就是这种代码会出 bug，这是应得的

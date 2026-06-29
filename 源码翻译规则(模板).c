@@ -97,9 +97,9 @@ void _co_函数名(struct coro_stu *father, struct coro_stu *co, 函数参数...
 _colable_函数名_0:
     // 初始化协程对象
     co->father = father;
-    co->father->son = co;
+    if(father != NULL) co->father->son = co;
     // 配置状态机回调
-    _coro_init(co, _cocb_函数名);
+    ctx_coro_init(co, _cocb_函数名);
 
     /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */
     _prv_data->函数参数... = 函数参数...;
@@ -132,7 +132,7 @@ _colable_函数名_下一步骤编号:
     /* END: 检测到 _await_static 关键字，替换 */
 
     /* BEGIN: 检测到 _yield 关键字，替换 */
-    _coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
+    ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
     co->step = 下一步骤编号;
     return ; // 出让
 _colable_函数名_下一步骤编号:
@@ -153,7 +153,7 @@ _colable_函数名_下一步骤编号:
     // 在函数最后插入收尾操作
 _colable_函数名_end:
     // 唤醒父协程
-    _coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+    ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
     co->step = 0; // 复位状态机
     // free 交给父协程
 }
