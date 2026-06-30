@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 C 无栈协程 _async 源到源翻译器
-2026年6月27日
+2026年6月27日: V0.1
+2026年6月30日: V0.3, 修改协程收尾操作
 
 用法：python coro_translater.py <input.c> [--line]
 输出：
@@ -640,7 +641,7 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
     out.append(f"_colable_{fname}_0:\n")
     out.append(indent + "// 初始化协程对象\n")
     out.append(indent + "co->father = father;\n")
-    out.append(indent + "if(father != NULL) co->father->son = co;\n")
+    out.append(indent + "if(father != NULL) father->son = co;\n")
     out.append(indent + f"// 配置状态机回调\n")
     out.append(indent + f"ctx_coro_init(co, _cocb_{fname});\n")
     out.append("\n")
@@ -707,7 +708,7 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             out.append(orig_indent + "// free 子协程对象\n")
             out.append(orig_indent + "ctx_mem_data_free(co->son->prv_data);\n")
             out.append(orig_indent + "ctx_mem_free(co->son);\n")
-            out.append(orig_indent + "// co->son = NULL;\n")
+            out.append(orig_indent + "co->son = NULL;\n")
             out.append(orig_indent + "/* END: 检测到 _await 关键字，替换 */\n")
             if enable_line:
                 out.append(f'#line {line_num + 1} "{source_file}"\n')
@@ -760,10 +761,14 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
 
     out.append(inner[last_end:])
     out.append(f"_colable_{fname}_end:\n")
-    out.append(indent + "// 唤醒父协程\n")
-    out.append(indent + "ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒\n")
     out.append(indent + "co->step = 0; // 复位状态机\n")
-    out.append(indent + "// free 操作交给父协程\n")
+    out.append(indent + "if(father == NULL){ // 没有父协程则自己 free 自己\n")
+    out.append(indent + indent + "ctx_mem_data_free(co->prv_data);\n")
+    out.append(indent + indent + "ctx_mem_free(co);\n")
+    out.append(indent + "}else {\n")
+    out.append(indent + indent + "// 唤醒父协程\n")
+    out.append(indent + indent + "ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒\n")
+    out.append(indent + "}\n")
     out.append("}\n")
 
     return ''.join(out)

@@ -97,7 +97,7 @@ void _co_函数名(struct coro_stu *father, struct coro_stu *co, 函数参数...
 _colable_函数名_0:
     // 初始化协程对象
     co->father = father;
-    if(father != NULL) co->father->son = co;
+    if(father != NULL) father->son = co;
     // 配置状态机回调
     ctx_coro_init(co, _cocb_函数名);
 
@@ -116,9 +116,9 @@ _colable_函数名_下一步骤编号:
     /* 如果用户未接收返回值，那么不需要生成下面这句：*/
     用户接收返回值的变量 = ((struct _coval_被调用函数名 *)(co->son->prv_data))->_coretval_;
     // free 子协程对象
-    _com_data_free(co->son->prv_data);
+    ctx_mem_data_free(co->son->prv_data);
     ctx_mem_free(co->son);
-    // co->son = NULL;
+    co->son = NULL;
     /* END: 检测到 _await 关键字，替换 */
 
 
@@ -152,10 +152,14 @@ _colable_函数名_下一步骤编号:
 
     // 在函数最后插入收尾操作
 _colable_函数名_end:
-    // 唤醒父协程
-    ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
     co->step = 0; // 复位状态机
-    // free 交给父协程
+    if(father == NULL){ // 没有父协程则自己 free 自己
+        ctx_mem_data_free(co->prv_data);
+        ctx_mem_free(co);
+    }else {
+        // 唤醒父协程
+        ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+    }
 }
 
 // 封装给调度器用的通用回调

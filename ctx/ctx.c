@@ -122,11 +122,13 @@ void ctx_coro_init(struct coro_stu *co, void (*callback)(struct coro_stu *co)){
     co->subscriber_alarm.prev = &(co->alarm_next_run.topic.subscriber_head);
     co->subscriber_alarm.next = NULL;
     co->subscriber_alarm.callback_func = _co_alarm_cb;
+
+    co->son = NULL;
     
 	// return 0;
 }
 
-// 恢复某协程的执行
+// 直接恢复 某协程 的执行，不关心父子协程关系
 // ticks 传入 0 则代表尽快唤醒
 void ctx_coro_wake(struct coro_stu *co, TickType_t ticks){
     if(co == NULL){
@@ -144,8 +146,11 @@ void ctx_coro_wake(struct coro_stu *co, TickType_t ticks){
     }
 }
 
-// 暂停某协程的执行
+// 暂停 某协程任务 的执行，会遍历整条调用链，暂停最终的子协程
 void ctx_coro_pause(struct coro_stu *co){
+    while(co->son != NULL && co->son != &__son_placeholder__){
+        co = co->son;
+    }
     ltx_Alarm_remove(&(co->alarm_next_run));
     
     if(co->topic_wait_for != NULL){
@@ -153,6 +158,26 @@ void ctx_coro_pause(struct coro_stu *co){
     }
 }
 
+// 恢复 某协程任务 的执行，会遍历整条调用链，唤醒最终的子协程
+// ticks 传入 0 则代表尽快唤醒
+void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
+    if(co == NULL){
+        return ;
+    }
+    while(co->son != NULL && co->son != &__son_placeholder__){
+        co = co->son;
+    }
+    
+    if(!ticks){ // 要求尽快执行
+        ltx_Topic_publish(&(co->alarm_next_run.topic));
+        return ;
+    }
+
+    ltx_Alarm_add(&(co->alarm_next_run), ticks);
+    if(co->topic_wait_for != NULL){
+        ltx_Topic_subscribe(co->topic_wait_for, &(co->subscriber_topic));
+    }
+}
 
 
 // 协程对象池

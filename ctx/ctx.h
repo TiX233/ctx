@@ -2,9 +2,10 @@
  * @file ctx.h
  * @author realTiX
  * @brief c 无栈协程管理器，需要搭配 coro_translater.py 做源到源翻译使用，目前暂时与 ltx 调度器紧耦合
- * @version 0.2
+ * @version 0.3
  * @date 2026-06-28 (0.1，初步完成设计)
  *       2026-06-29 (0.2，补充内存分配的判断；修复 delay 用错对象的 bug)
+ *       2026-06-30 (0.3，启动调度器管理的协程可以动态创建了；增加对整条异步任务链的启停管理)
  * 
  * @copyright Copyright (c) 2026
  * 
@@ -26,7 +27,8 @@
 // 一个 struct coro_stu obj = {xxx}; 的全局变量，内部的 prv_data 指针会指向 _prvdata_obj
 #define _co_static_obj(obj, func)           struct _coval_##func _prvdata_##obj;struct coro_stu obj = {.prv_data = &_prvdata_##obj}
 
-// 非 _async 函数启动 _async 函数需要使用此宏
+// 非 _async 函数启动 _async 函数需要使用此宏，或者 _async 函数启动一个与自己无关的任务
+// obj_ptr 传入 NULL 表示动态创建，执行完毕后会自动释放
 #define _start_async(obj_ptr, func, ...)    _co_##func(NULL, obj_ptr, ##__VA_ARGS__)
 // 对转译后的函数进行声明可以使用此宏
 // 一般不需要手动声明，翻译脚本会创建好函数声明
@@ -54,11 +56,13 @@ struct _coval_wait_topic {uint8_t _coretval_;};
 
 // 初始化协程
 void ctx_coro_init(struct coro_stu *co, void (*callback)(struct coro_stu *co));
-// 恢复某协程的执行
+// 直接恢复 某协程 的执行，不关心父子关系，不建议用户调用
 // ticks 传入 0 则代表尽快唤醒
 void ctx_coro_wake(struct coro_stu *co, TickType_t ticks);
-// 暂停某协程的执行
+// 暂停 某协程任务链 的执行
 void ctx_coro_pause(struct coro_stu *co);
+// 恢复 某协程任务链 的执行
+void ctx_coro_resume(struct coro_stu *co, TickType_t ticks);
 
 // 预设的 delay 函数实现
 void delay_ticks(TickType_t ticks);
