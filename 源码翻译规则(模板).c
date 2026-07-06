@@ -129,6 +129,7 @@ _colable_函数名_下一步骤编号:
 _colable_函数名_下一步骤编号:
     /* 如果用户未接收返回值，那么不需要生成下面这句：*/
     用户接收返回值的变量 = ((struct _coval_被调用函数名 *)(co->son->prv_data))->_coretval_;
+    co->son = NULL;
     /* END: 检测到 _await_static 关键字，替换 */
 
     /* BEGIN: 检测到 _yield 关键字，替换 */

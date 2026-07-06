@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# Copyright (c) 2026, realTiX
+# SPDX-License-Identifier: Apache-2.0
+
 """
 C 无栈协程 _async 源到源翻译器
-2026年6月27日: V0.1
-2026年6月30日: V0.3, 修改协程收尾操作
+2026年 6月27日: V0.1
+2026年 6月30日: V0.3, 修改协程收尾操作
+2026年 7月 6日: V0.4, 补充 _await_static 的设置子协程为 NULL 操作
 
-用法：python coro_translater.py <input.c> [--line]
+用法: python coro_translater.py <input.c> [--line]
 输出：
-  - <input>.c.coro.h   （结构体定义）
-  - <input>.c.coro     （其余翻译代码）
+  - <input.c>.coro.h   （结构体定义）
+  - <input.c>.coro     （其余翻译代码）
 若无 _async 函数则不会生成任何文件。
 """
 
@@ -738,6 +744,7 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
                 out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
             else:
                 out.append(orig_indent + "/* 用户未接收返回值 */\n")
+            out.append(orig_indent + "co->son = NULL;\n")
             out.append(orig_indent + "/* END: 检测到 _await_static 关键字，替换 */\n")
             if enable_line:
                 out.append(f'#line {line_num + 1} "{source_file}"\n')

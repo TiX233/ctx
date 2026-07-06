@@ -7,8 +7,10 @@
  *       2026-06-29 (0.2，补充内存分配的判断；修复 delay 用错对象的 bug)
  *       2026-06-30 (0.3，启动调度器管理的协程可以动态创建了；增加对整条异步任务链的启停管理)
  * 
- * @copyright Copyright (c) 2026
- * 
+ * @copyright Copyright (c) 2026, realTiX
+ * @license Apache-2.0
+ *
+ * SPDX-License-Identifier: Apache-2.0
  */
 #ifndef __CTX_H__
 #define __CTX_H__
@@ -36,6 +38,7 @@
 
 
 // 协程对象
+// 也许应该叫协程控制块（CCB 说是
 struct coro_stu {
     // uint8_t flag_is_ready;
     uint32_t step;
@@ -49,6 +52,7 @@ struct coro_stu {
 
     struct coro_stu *father;
     struct coro_stu *son;
+    // 似乎更应该叫协程帧
     void *prv_data;                                         // 私有数据，包含参数、需要保存的局部变量以及返回值
 };
 

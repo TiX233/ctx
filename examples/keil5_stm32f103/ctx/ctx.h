@@ -7,8 +7,10 @@
  *       2026-06-29 (0.2，补充内存分配的判断；修复 delay 用错对象的 bug)
  *       2026-06-30 (0.3，启动调度器管理的协程可以动态创建了)
  * 
- * @copyright Copyright (c) 2026
- * 
+ * @copyright Copyright (c) 2026, realTiX
+ * @license Apache-2.0
+ *
+ * SPDX-License-Identifier: Apache-2.0
  */
 #ifndef __CTX_H__
 #define __CTX_H__
