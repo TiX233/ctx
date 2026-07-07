@@ -2,10 +2,11 @@
  * @file ctx.h
  * @author realTiX
  * @brief c 无栈协程管理器，需要搭配 coro_translater.py 做源到源翻译使用，目前暂时与 ltx 调度器紧耦合
- * @version 0.3
+ * @version 0.4
  * @date 2026-06-28 (0.1，初步完成设计)
  *       2026-06-29 (0.2，补充内存分配的判断；修复 delay 用错对象的 bug)
  *       2026-06-30 (0.3，启动调度器管理的协程可以动态创建了；增加对整条异步任务链的启停管理)
+ *       2026-07-07 (0.4, 将指针变量由 uint32_t 改为 uintptr_t 兼容 64 位设备)
  * 
  * @copyright Copyright (c) 2026, realTiX
  * @license Apache-2.0

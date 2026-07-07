@@ -180,6 +180,7 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
 }
 
 
+
 // 协程对象池
 // 使用侵入式链表与 freelist，节约空间且获取空闲块与释放块只需要几个指令周期
 // struct coro_stu __co_dynamic_obj_pool__[CO_MAX_POOL_SIZE];
@@ -251,7 +252,7 @@ void* ctx_mem_alloc(uint32_t size){
     return block;
 }
 
-// 对于私有数据结构体，有可能超出单个块的尺寸，应该报错让用户提升内存池单个块大小
+// 对于私有数据结构体，私有数据结构体有可能超出单个块的尺寸，应该报错让用户提升内存池单个对象大小
 ltx_weak
 void* ctx_mem_data_alloc(uint32_t size){
     if(size > __co_prvdata_pool_ctrl.block_size){
@@ -280,7 +281,7 @@ ltx_weak
 void ctx_mem_free(void *ptr){
     if (ptr == NULL) return ;
     // 判断是否在内存池范围内
-    if(ptr < __co_dynamic_obj_pool__ || ptr >= (__co_dynamic_obj_pool__ + CO_MAX_POOL_COUNT * sizeof(struct coro_stu))){
+    if((uintptr_t)ptr < (uintptr_t)__co_dynamic_obj_pool__ || (uintptr_t)ptr >= (uintptr_t)(__co_dynamic_obj_pool__ + CO_MAX_POOL_COUNT * sizeof(struct coro_stu))){
         return ;
     }
 
@@ -297,7 +298,7 @@ ltx_weak
 void ctx_mem_data_free(void *ptr){
     if (ptr == NULL) return ;
     // 判断是否在内存池范围内
-    if(ptr < __co_dynamic_prvdata_obj_pool__ || ptr >= (__co_dynamic_prvdata_obj_pool__ + CO_MAX_POOL_COUNT * CO_MAX_PRVDATA_SIZE)){
+    if((uintptr_t)ptr < (uintptr_t)__co_dynamic_prvdata_obj_pool__ || (uintptr_t)ptr >= (uintptr_t)(__co_dynamic_prvdata_obj_pool__ + CO_MAX_POOL_COUNT * CO_MAX_PRVDATA_SIZE)){
         return ;
     }
 

@@ -281,7 +281,7 @@ ltx_weak
 void ctx_mem_free(void *ptr){
     if (ptr == NULL) return ;
     // 判断是否在内存池范围内
-    if((uint32_t)ptr < (uint32_t)__co_dynamic_obj_pool__ || (uint32_t)ptr >= (uint32_t)(__co_dynamic_obj_pool__ + CO_MAX_POOL_COUNT * sizeof(struct coro_stu))){
+    if((uintptr_t)ptr < (uintptr_t)__co_dynamic_obj_pool__ || (uintptr_t)ptr >= (uintptr_t)(__co_dynamic_obj_pool__ + CO_MAX_POOL_COUNT * sizeof(struct coro_stu))){
         return ;
     }
 
@@ -298,7 +298,7 @@ ltx_weak
 void ctx_mem_data_free(void *ptr){
     if (ptr == NULL) return ;
     // 判断是否在内存池范围内
-    if((uint32_t)ptr < (uint32_t)__co_dynamic_prvdata_obj_pool__ || (uint32_t)ptr >= (uint32_t)(__co_dynamic_prvdata_obj_pool__ + CO_MAX_POOL_COUNT * CO_MAX_PRVDATA_SIZE)){
+    if((uintptr_t)ptr < (uintptr_t)__co_dynamic_prvdata_obj_pool__ || (uintptr_t)ptr >= (uintptr_t)(__co_dynamic_prvdata_obj_pool__ + CO_MAX_POOL_COUNT * CO_MAX_PRVDATA_SIZE)){
         return ;
     }
 
