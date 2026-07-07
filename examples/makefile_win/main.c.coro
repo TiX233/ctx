@@ -1,0 +1,93 @@
+#include "main.c.coro.h"
+
+/**
+ * 识别到 _async 关键字
+ * 函数名称: task_test
+ * 返回类型: void
+ * 起始行号: 13
+ * 终止行号: 17
+ * 
+ * 参数: 
+ *       TickType_t delay
+ *       int task_id
+ * 
+ * 需要持久化的局部变量: 
+ *           (无)
+ */
+
+void _cocb_task_test(struct coro_stu *co);
+
+// ======== 翻译后的函数体 ========
+void _co_task_test(struct coro_stu *father, struct coro_stu *co, TickType_t delay, int task_id)
+{
+    struct _coval_task_test *_prv_data;
+
+    // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象
+    if(co == NULL){
+        // 动态分配
+        co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));
+        if(co == NULL){
+            return ;
+        }
+        co->prv_data = (struct _coval_task_test *)ctx_mem_data_alloc(sizeof(struct _coval_task_test));
+        if(co->prv_data == NULL){
+            ctx_mem_free(co);
+            return ;
+        }
+        co->step = 0;
+    }
+    _prv_data = (struct _coval_task_test *)co->prv_data;
+
+    switch(co->step){
+        case 0: goto _colable_task_test_0;
+        case 1: goto _colable_task_test_1;
+    }
+
+    // 步骤 0 用于初始化
+_colable_task_test_0:
+    // 初始化协程对象
+    co->father = father;
+    if(father != NULL) father->son = co;
+    // 配置状态机回调
+    ctx_coro_init(co, _cocb_task_test);
+
+    /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */
+    _prv_data->delay = delay;
+    _prv_data->task_id = task_id;
+    /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */
+
+#line 13 "main.c"
+
+    while(1){
+        printf("Task %d running...\n", _prv_data->task_id);
+        #line 16 "main.c"
+
+        /* BEGIN: 检测到 _await 关键字，替换 */
+        _co_delay_ticks(co, NULL, _prv_data->delay);
+        co->step = 1;
+        return ; // 出让
+_colable_task_test_1:
+        /* 用户未接收返回值 */
+        // free 子协程对象
+        ctx_mem_data_free(co->son->prv_data);
+        ctx_mem_free(co->son);
+        co->son = NULL;
+        /* END: 检测到 _await 关键字，替换 */
+#line 17 "main.c"
+
+    }
+_colable_task_test_end:
+    co->step = 0; // 复位状态机
+    if(father == NULL){ // 没有父协程则自己 free 自己
+        ctx_mem_data_free(co->prv_data);
+        ctx_mem_free(co);
+    }else {
+        // 唤醒父协程
+        ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+    }
+}
+
+
+void _cocb_task_test(struct coro_stu *co) {
+    _co_task_test(co->father, co, ((struct _coval_task_test *)co->prv_data)->delay, ((struct _coval_task_test *)co->prv_data)->task_id);
+}
