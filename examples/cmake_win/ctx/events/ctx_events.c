@@ -14,7 +14,7 @@ uint32_t ctx_wait_events(struct ctx_events_stu *events, TickType_t time_out, uin
             // 判断事件组是否满足
         if(and_or == CTX_EVENTS_TYPE_OR){
             // 事件或，满足任一事件即可触发
-            if(events_wait_for | events->events_now){
+            if(events_wait_for & events->events_now){
                 return events->events_now;
             }
         }else {
@@ -112,6 +112,27 @@ void _co_ctx_wait_events(struct coro_stu *father, struct coro_stu *co,
     // 初始化协程对象
     co->father = father;
     if(father != NULL) father->son = co;
+
+    // 进入时就判断是否满足，满足则直接让父任务恢复执行
+    if(and_or == CTX_EVENTS_TYPE_OR){
+        // 事件或，满足任一事件即可触发
+        if(events_wait_for & events->events_now){
+            _prv_data->_coretval_ = events->events_now;
+            // 唤醒父协程
+            ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+            return ;
+        }
+    }else {
+        // 事件与
+        // 满足所有需要触发的事件
+        if((events_wait_for & events->events_now) == events_wait_for){
+            _prv_data->_coretval_ = events->events_now;
+            // 唤醒父协程
+            ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+            return ;
+        }
+    }
+
     // 配置状态机回调
     // ctx_coro_init(co, _cocb_ctx_wait_events);
     // 换掉 ctx_coro_init，使用事件组回调

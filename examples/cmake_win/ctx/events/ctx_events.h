@@ -2,8 +2,9 @@
  * @file ctx_events.h
  * @author realTiX
  * @brief ctx 配套 事件组 组件，可等待最多 31 个事件并设置超时时间。支持 事件与 以及 事件或；支持多生产者多消费者
- * @version 0.1
+ * @version 0.2
  * @date 2026-07-10 (0.1，初步完成设计)
+ *       2026-07-11 (0.2，增加调用时立即判断一次事件位是否满足)
  * 
  * @copyright Copyright (c) 2026, realTiX
  * @license Apache-2.0
