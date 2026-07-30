@@ -72,6 +72,8 @@ void _co_alarm_cb(void *param){
         ltx_Topic_unsubscribe(pCo->topic_wait_for, &(pCo->subscriber_topic));
         pCo->topic_wait_for = NULL;
         __wait_topic_prv_data__._coretval_ = 1;
+    }else {
+        __wait_topic_prv_data__._coretval_ = 0;
     }
     // 调用回调
     pCo->callback(pCo);
