@@ -212,6 +212,7 @@ struct _co_pool_ctrl_stu __co_prvdata_pool_ctrl = {
 
 // 整个系统运行前调用一次，初始化内存池
 // 如果全程都没有用 _await 关键字的话，那么可以不用配置内存池空间并且初始化
+ltx_weak
 void ctx_mem_pool_init(void){
 
     // 初始化空闲链表：每个块的开头写入下一个块的地址
@@ -248,8 +249,8 @@ void* ctx_mem_alloc(uint32_t size){
     _LTX_IRQ_ENABLE();
 
     if(block == NULL){
-        // todo
-        // 这里应该触发异常打印调用栈
+        // 内存不足
+        ctx_mem_run_out();
     }
     return block;
 }
@@ -258,8 +259,8 @@ void* ctx_mem_alloc(uint32_t size){
 ltx_weak
 void* ctx_mem_data_alloc(uint32_t size){
     if(size > __co_prvdata_pool_ctrl.block_size){
-        // todo
-        // 这里应该触发异常打印调用栈
+        // 内存池单个对象尺寸不够导致的无法分配内存
+        ctx_mem_run_out();
         return NULL;
     }
 
@@ -273,8 +274,8 @@ void* ctx_mem_data_alloc(uint32_t size){
 
     _LTX_IRQ_ENABLE();
     if(block == NULL){
-        // todo
-        // 这里应该触发异常打印调用栈
+        // 内存池空闲对象耗尽导致的内存不足
+        ctx_mem_run_out();
     }
     return block;
 }
@@ -311,4 +312,12 @@ void ctx_mem_data_free(void *ptr){
     __co_prvdata_pool_ctrl.free_list = ptr;
 
     _LTX_IRQ_ENABLE();
+}
+
+// 内存不足无法分配时会调用此函数
+ltx_weak 
+void ctx_mem_run_out(void){
+    while(1){
+
+    }
 }

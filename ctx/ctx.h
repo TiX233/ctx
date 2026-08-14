@@ -2,12 +2,13 @@
  * @file ctx.h
  * @author realTiX
  * @brief c 无栈协程管理器，需要搭配 coro_translater.py 做源到源翻译使用，目前暂时与 ltx 调度器紧耦合
- * @version 0.5
- * @date 2026-06-28 (0.1，初步完成设计)
- *       2026-06-29 (0.2，补充内存分配的判断；修复 delay 用错对象的 bug)
- *       2026-06-30 (0.3，启动调度器管理的协程可以动态创建了；增加对整条异步任务链的启停管理)
+ * @version 0.6
+ * @date 2026-06-28 (0.1, 初步完成设计)
+ *       2026-06-29 (0.2, 补充内存分配的判断；修复 delay 用错对象的 bug)
+ *       2026-06-30 (0.3, 启动调度器管理的协程可以动态创建了；增加对整条异步任务链的启停管理)
  *       2026-07-07 (0.4, 将指针变量由 uint32_t 改为 uintptr_t 兼容 64 位设备)
  *       2026-07-30 (0.5, 闹钟回调增加超时返回值置零操作，提高拓展性)
+ *       2026-08-14 (0.6, 增加内存耗尽钩子函数)
  * 
  * @copyright Copyright (c) 2026, realTiX
  * @license Apache-2.0
@@ -71,23 +72,27 @@ void ctx_coro_pause(struct coro_stu *co);
 void ctx_coro_resume(struct coro_stu *co, TickType_t ticks);
 
 // 预设的 delay 函数实现
-void delay_ticks(TickType_t ticks);
+void delay_ticks(TickType_t ticks);                                         // *可以使用 _awiat/_await_static 调用
 void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ticks);
 
 // 预设的等待事件话题实现，可设置超时时间，timeout 如果为 0 则以最大计时时间进行等待
 // 返回 1 代表等待事件超时
-uint8_t wait_topic(struct ltx_Topic_stu *topic, TickType_t time_out);
+uint8_t wait_topic(struct ltx_Topic_stu *topic, TickType_t time_out);       // *可以使用 _awiat/_await_static 调用
 void _co_wait_topic(struct coro_stu *father, struct coro_stu *co, struct ltx_Topic_stu *topic, TickType_t time_out);
 
+
+// 内存相关函数都是弱定义，用户可替换为自己的实现。如果程序中全程没有使用到 _await 而是只使用 _await_static，那么可以不需要以下内容
 
 // 整个系统运行前调用一次，初始化内存池
 void ctx_mem_pool_init(void);
 // 默认使用对象池分配，所以 size 参数此时无意义
-void* ctx_mem_alloc(uint32_t size);
-void* ctx_mem_data_alloc(uint32_t size);
+void* ctx_mem_alloc(uint32_t size);         // 分配协程控制块 CCB，适合使用固定大小内存块
+void* ctx_mem_data_alloc(uint32_t size);    // 分配协程帧，也就是局部变量，默认是固定大小内存块，其实比较适合 malloc 分配不定大小，但是没这个快
 
 void ctx_mem_free(void *ptr);
 void ctx_mem_data_free(void *ptr);
 
+// 内存耗尽会调用此函数，用户可在这里处理异常
+void ctx_mem_run_out(void);
 
 #endif // __CTX_H__
