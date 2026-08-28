@@ -989,7 +989,7 @@ def process(input_file, enable_line):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: python async_extractor.py <input.c> [--line]")
+        print("Usage: python coro_translater.py <input.c> [--line]")
         sys.exit(1)
 
     input_file = sys.argv[1]
