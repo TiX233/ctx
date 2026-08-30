@@ -9,6 +9,7 @@ C 无栈协程 _async 源到源翻译器
 2026年 6月27日: V0.1
 2026年 6月30日: V0.3, 修改协程收尾操作
 2026年 7月 6日: V0.4, 补充 _await_static 的设置子协程为 NULL 操作
+2026年 8月30日: V0.5, 修复循环体对变量作用域误判的问题; 修复异步等待结果时遗留变量类型的问题，并且优化相关变量作用域判断
 
 用法: python coro_translater.py <input.c> [--line]
 输出：
@@ -251,6 +252,10 @@ def try_parse_declaration(tokens, idx, end_idx, source):
             idx += 1
             continue
         if ct[1] == '*':
+            # `*z`/`*ptr` in expressions are not declarations. A declaration must start with a
+            # real type token or qualifier before a pointer modifier, not a bare pointer dereference.
+            if not type_tokens:
+                return None, save + 1
             type_tokens.append(ct)
             idx += 1
             continue
@@ -382,9 +387,10 @@ class VarInfo:
 # ================================================
 # 递归作用域分析
 # ================================================
-def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False):
-    variables = []
+def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=None):
+    variables = [] if parent_vars is None else list(parent_vars)
     yields = []
+    await_returns = {}
 
     idx = lbrace + 1
     while idx < rbrace:
@@ -398,18 +404,27 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False):
             continue
 
         if t[0] == 'identifier' and t[1] in ('_yield', '_await', '_await_static'):
+            if t[1] == '_await':
+                stmt_start = idx
+                while stmt_start > lbrace and tokens[stmt_start - 1][1] not in (';', '{', '}'):
+                    stmt_start -= 1
+                stmt_segment = source[tokens[stmt_start][2] : tokens[idx][3]] if stmt_start <= idx else source
+                m = re.search(r'(?:(?:[A-Za-z_][A-Za-z0-9_\s\*\[\]]*?)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*$', stmt_segment)
+                if m:
+                    await_returns[m.group(1)] = idx
             yields.append(idx)
             idx += 1
             continue
 
         if t[1] == '{':
             close = find_matching_brace(tokens, idx, rbrace)
-            inner_vars, inner_yields = analyze_scope(tokens, idx, close, source, in_loop)
+            inner_vars, inner_yields, inner_await_returns = analyze_scope(tokens, idx, close, source, in_loop, variables)
             for iv in inner_vars:
-                iv.inside_loop = in_loop
+                iv.inside_loop = iv.inside_loop or in_loop
                 variables = [v for v in variables if v.name != iv.name]
                 variables.append(iv)
             yields.extend(inner_yields)
+            await_returns.update(inner_await_returns)
             idx = close + 1
             continue
 
@@ -438,12 +453,13 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False):
                 close = find_matching_brace(tokens, idx, rbrace)
                 is_loop = kw in ('for', 'while', 'do')
                 inner_in_loop = in_loop or is_loop
-                inner_vars, inner_yields = analyze_scope(tokens, idx, close, source, inner_in_loop)
+                inner_vars, inner_yields, inner_await_returns = analyze_scope(tokens, idx, close, source, inner_in_loop, variables)
                 for iv in inner_vars:
-                    iv.inside_loop = inner_in_loop
+                    iv.inside_loop = iv.inside_loop or inner_in_loop
                     variables = [v for v in variables if v.name != iv.name]
                     variables.append(iv)
                 yields.extend(inner_yields)
+                await_returns.update(inner_await_returns)
                 for vi in for_head_vars:
                     vi.scope_end = close
                     vi.inside_loop = True
@@ -470,6 +486,21 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False):
                     idx += 1
             continue
 
+        stmt_start = idx
+        while stmt_start > lbrace and tokens[stmt_start - 1][1] not in (';', '{', '}'):
+            stmt_start -= 1
+        stmt_end = idx
+        while stmt_end < rbrace and tokens[stmt_end][1] not in (';', '{', '}'):
+            stmt_end += 1
+        stmt_text = source[tokens[stmt_start][2]:tokens[stmt_end][2]] if stmt_end <= rbrace and stmt_start <= stmt_end else ''
+        for j in range(stmt_start, min(stmt_end, rbrace)):
+            if tokens[j][0] == 'identifier' and tokens[j][1] in ('_yield', '_await', '_await_static'):
+                yields.append(j)
+                if tokens[j][1] == '_await':
+                    m = re.search(r'(?:(?:[A-Za-z_][A-Za-z0-9_\s\*\[\]]*?)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*_await\s+', stmt_text)
+                    if m:
+                        await_returns[m.group(1)] = j
+
         decl_start = idx
         vlist, idx = try_parse_declaration(tokens, idx, rbrace, source)
         if vlist:
@@ -477,6 +508,8 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False):
             for v in vlist:
                 vi = VarInfo(v['type'], v['name'], decl_start, decl_end, rbrace, v['name_token_idx'], v.get('init'))
                 vi.inside_loop = in_loop
+                if vi.init is not None and '_await' in vi.init:
+                    await_returns[vi.name] = idx
                 variables = [v for v in variables if v.name != vi.name]
                 variables.append(vi)
         else:
@@ -492,25 +525,62 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False):
                         break
                     if i <= v.scope_end:
                         v.refs.append(i)
+                        if in_loop:
+                            v.inside_loop = True
                     break
+        elif tok[0] == 'other' and tok[1] == '&':
+            j = i + 1
+            j = skip_whitespace(tokens, j, rbrace)
+            if j <= rbrace and tokens[j][0] == 'identifier':
+                for v in reversed(variables):
+                    if v.name == tokens[j][1] and j <= v.scope_end:
+                        v.refs.append(j)
+                        break
 
-    return variables, yields
+    return variables, yields, await_returns
 
-def determine_promoted(variables, yields):
+def determine_promoted(variables, yields, await_returns=None):
+    if await_returns is None:
+        await_returns = {}
     promoted = {}
     for v in variables:
         if not v.refs:
             continue
+
+        refs = [r for r in v.refs if r > v.decl_end]
+        if not refs:
+            continue
+
         relevant_yields = [y for y in yields if v.decl_start < y <= v.scope_end]
         if not relevant_yields:
             continue
-        if v.inside_loop:
+
+        refs_for_liveness = refs
+        receiver_pos = await_returns.get(v.name)
+        if receiver_pos is not None:
+            # If a different variable receives an awaited result later, any later use
+            # of this variable after that point is stale state from the old value and
+            # should not count as a real cross-yield liveness requirement.
+            later_receive_positions = sorted(
+                pos for other_name, pos in await_returns.items() if other_name != v.name and pos > receiver_pos
+            )
+            if later_receive_positions:
+                cutoff = later_receive_positions[0]
+                refs_for_liveness = [r for r in refs if r < cutoff]
+                if not refs_for_liveness:
+                    continue
+
+        hangs_across_yield = False
+        for y in relevant_yields:
+            before = any(ref < y for ref in refs_for_liveness)
+            after = any(ref > y for ref in refs_for_liveness)
+            if before and after:
+                hangs_across_yield = True
+                break
+
+        if hangs_across_yield:
             promoted[v.name] = v
-        else:
-            for y in relevant_yields:
-                if any(ref > y for ref in v.refs):
-                    promoted[v.name] = v
-                    break
+
     return promoted
 
 # ================================================
@@ -519,8 +589,8 @@ def determine_promoted(variables, yields):
 def variable_hoisting_body(func_info, tokens, source, param_names):
     lbrace = func_info['lbrace']
     rbrace = func_info['rbrace']
-    variables, yields = analyze_scope(tokens, lbrace, rbrace, source, in_loop=False)
-    promoted = determine_promoted(variables, yields)
+    variables, yields, await_returns = analyze_scope(tokens, lbrace, rbrace, source, in_loop=False)
+    promoted = determine_promoted(variables, yields, await_returns)
 
     replace_names = set(promoted.keys()) | set(param_names)
 
@@ -580,39 +650,92 @@ def get_line_indent(text, pos):
     return line[:len(line) - len(line.lstrip())]
 
 def apply_state_machine(hoisted_body, fname, ret_type, param_names,
-                        body_start_line, enable_line, source_file):
+                        body_start_line, enable_line, source_file,
+                        promoted_names=None):
+    if promoted_names is None:
+        promoted_names = set()
     body = hoisted_body
     lbrace = body.find('{')
     rbrace = body.rfind('}')
     if lbrace == -1 or rbrace == -1:
         return body
-    inner = body[lbrace+1 : rbrace]
+    inner = body[lbrace + 1 : rbrace]
 
-    pattern_await = re.compile(
-        r'(?:(\S+(?:\s*->\s*\w+)*)\s*=\s*)?'   # 可选的左值 =
-        r'_await\s+(\w+)\s*\(([^)]*)\)\s*;'
-    )
-    pattern_await_static = re.compile(
-        r'(?:(\S+(?:\s*->\s*\w+)*)\s*=\s*)?'   # 可选的左值 =
-        r'_await_static\s*\(([^)]+)\)\s+(\w+)\s*\(([^)]*)\)\s*;'
-    )
+    pattern_await = re.compile(r'_await\s+(?P<func>\w+)\s*\((?P<args>[^)]*)\)\s*;')
+    pattern_await_static = re.compile(r'_await_static\s*\((?P<obj>[^)]+)\)\s+(?P<func>\w+)\s*\((?P<args>[^)]*)\)\s*;')
     pattern_yield = re.compile(r'_yield\s*\(\s*\)\s*;')
     pattern_return = re.compile(r'return\s*(.*?)\s*;')
 
+    def statement_start_for_pos(text, pos):
+        i = pos
+        while i > 0 and text[i - 1] not in ';{}':
+            i -= 1
+        return i
+
+    def rewrite_promoted_expr(expr, promoted_names):
+        if expr is None:
+            return expr
+        out = []
+        i = 0
+        while i < len(expr):
+            ch = expr[i]
+            if ch.isalpha() or ch == '_':
+                j = i + 1
+                while j < len(expr) and (expr[j].isalnum() or expr[j] == '_'):
+                    j += 1
+                word = expr[i:j]
+
+                k = i - 1
+                while k >= 0 and expr[k].isspace():
+                    k -= 1
+                prev_sig = expr[k] if k >= 0 else ''
+
+                # Already a member access like `_prv_data->sensor_data`; do not rewrite again.
+                if word == '_prv_data':
+                    out.append(word)
+                elif word in promoted_names and prev_sig not in ('>', '.', '_'):
+                    out.append(f"_prv_data->{word}")
+                else:
+                    out.append(word)
+                i = j
+                continue
+            out.append(ch)
+            i += 1
+        return ''.join(out)
+
+    def extract_lhs_before_await(text, pos):
+        stmt_start = statement_start_for_pos(text, pos)
+        stmt_text = text[stmt_start:pos]
+        if '=' not in stmt_text:
+            return '', ''
+        left = stmt_text.rsplit('=', 1)[0].strip()
+        if not left:
+            return '', ''
+        if '->' in left:
+            base = left.rsplit('->', 1)[0].strip()
+            name = left.split('->')[-1].strip()
+            return base + '->', name
+        toks = left.split()
+        if len(toks) >= 2:
+            return ' '.join(toks[:-1]), toks[-1]
+        return '', toks[0] if toks else ''
+
     matches = []
     for m in pattern_await.finditer(inner):
-        matches.append(('await', m))
+        decl_prefix, recv_var = extract_lhs_before_await(inner, m.start())
+        matches.append(('await', m, decl_prefix, recv_var))
     for m in pattern_await_static.finditer(inner):
-        matches.append(('await_static', m))
+        decl_prefix, recv_var = extract_lhs_before_await(inner, m.start())
+        matches.append(('await_static', m, decl_prefix, recv_var))
     for m in pattern_yield.finditer(inner):
-        matches.append(('yield', m))
+        matches.append(('yield', m, '', ''))
     for m in pattern_return.finditer(inner):
-        matches.append(('return', m))
+        matches.append(('return', m, '', ''))
     matches.sort(key=lambda x: x[1].start())
 
     step = 1
     case_lines = [f"case 0: goto _colable_{fname}_0;"]
-    for typ, m in matches:
+    for typ, m, _, _ in matches:
         if typ in ('await', 'await_static', 'yield'):
             case_lines.append(f"case {step}: goto _colable_{fname}_{step};")
             step += 1
@@ -665,12 +788,14 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
 
     last_end = 0
     step = 1
-    for typ, m in matches:
-        start, end = m.start(), m.end()
-        out.append(inner[last_end:start])
+    for typ, m, decl_prefix, recv_var in matches:
+        stmt_start = statement_start_for_pos(inner, m.start())
+        stmt_end = m.end()
+        prefix = inner[last_end:stmt_start]
+        out.append(prefix)
 
-        orig_indent = get_line_indent(inner, start)
-        line_offset = inner[:start].count('\n')
+        orig_indent = get_line_indent(inner, stmt_start)
+        line_offset = inner[:stmt_start].count('\n')
         line_num = body_start_line + line_offset
 
         if enable_line:
@@ -688,27 +813,30 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             step += 1
 
         elif typ == 'await':
-            left_expr = m.group(1)
-            func = m.group(2)
-            args = m.group(3)
-            recv_var = None
-            if left_expr:
-                if '->' in left_expr:
-                    recv_var = left_expr.split('->')[-1].strip().rstrip('=').strip()
-                else:
-                    recv_var = left_expr.strip().rstrip('=').strip()
-            call_args = args if args else ""
+            func = m.group('func')
+            args = (m.group('args') or '').strip()
+            rewritten_args = rewrite_promoted_expr(args, promoted_names)
+            call_args = rewritten_args if rewritten_args else ""
             if call_args:
                 call_str = f"_co_{func}(co, NULL, {call_args})"
             else:
                 call_str = f"_co_{func}(co, NULL)"
-            out.append("\n" + orig_indent + "/* BEGIN: 检测到 _await 关键字，替换 */\n")
+            out.append("\n\n" + orig_indent + "/* BEGIN: 检测到 _await 关键字，替换 */\n")
             out.append(orig_indent + call_str + ";\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + "return ; // 出让\n")
             out.append(f"_colable_{fname}_{step}:\n")
             if recv_var:
-                out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
+                if recv_var in promoted_names:
+                    out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
+                elif decl_prefix:
+                    # C does not allow a declaration directly after a label unless it is
+                    # preceded by an empty statement. This is the resume-site pattern for
+                    # "type name = _await ...".
+                    out.append(orig_indent + ";\n")
+                    out.append(orig_indent + f"{decl_prefix} {recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
+                else:
+                    out.append(orig_indent + f"{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
             else:
                 out.append(orig_indent + "/* 用户未接收返回值 */\n")
             out.append(orig_indent + "// free 子协程对象\n")
@@ -721,27 +849,31 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             step += 1
 
         elif typ == 'await_static':
-            left_expr = m.group(1)
-            obj_ptr = m.group(2).strip()
-            func = m.group(3)
-            args = m.group(4)
-            recv_var = None
-            if left_expr:
-                if '->' in left_expr:
-                    recv_var = left_expr.split('->')[-1].strip().rstrip('=').strip()
-                else:
-                    recv_var = left_expr.strip().rstrip('=').strip()
-            if args:
-                call_args = f"{obj_ptr}, {args}"
+            obj_ptr = (m.group('obj') or '').strip()
+            func = m.group('func')
+            args = (m.group('args') or '').strip()
+            rewritten_obj = rewrite_promoted_expr(obj_ptr, promoted_names)
+            rewritten_args = rewrite_promoted_expr(args, promoted_names)
+            if rewritten_args:
+                call_args = f"{rewritten_obj}, {rewritten_args}"
             else:
-                call_args = obj_ptr
-            out.append("\n" + orig_indent + "/* BEGIN: 检测到 _await_static 关键字，替换 */\n")
+                call_args = rewritten_obj
+            out.append("\n\n" + orig_indent + "/* BEGIN: 检测到 _await_static 关键字，替换 */\n")
             out.append(orig_indent + f"_co_{func}(co, {call_args});\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + "return ; // 出让\n")
             out.append(f"_colable_{fname}_{step}:\n")
             if recv_var:
-                out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
+                if recv_var in promoted_names:
+                    out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
+                elif decl_prefix:
+                    # C does not allow a declaration directly after a label unless it is
+                    # preceded by an empty statement. This is the resume-site pattern for
+                    # "type name = _await ...".
+                    out.append(orig_indent + ";\n")
+                    out.append(orig_indent + f"{decl_prefix} {recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
+                else:
+                    out.append(orig_indent + f"{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
             else:
                 out.append(orig_indent + "/* 用户未接收返回值 */\n")
             out.append(orig_indent + "co->son = NULL;\n")
@@ -764,9 +896,21 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             if enable_line:
                 out.append(f'#line {line_num + 1} "{source_file}"\n')
 
-        last_end = end
+        last_end = stmt_end
 
     out.append(inner[last_end:])
+    out.append(f"_colable_{fname}_end:\n")
+    out.append(indent + "co->step = 0; // 复位状态机\n")
+    out.append(indent + "if(father == NULL){ // 没有父协程则自己 free 自己\n")
+    out.append(indent + indent + "ctx_mem_data_free(co->prv_data);\n")
+    out.append(indent + indent + "ctx_mem_free(co);\n")
+    out.append(indent + "}else {\n")
+    out.append(indent + indent + "// 唤醒父协程\n")
+    out.append(indent + indent + "ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒\n")
+    out.append(indent + "}\n")
+    out.append("}\n")
+
+    return ''.join(out)
     out.append(f"_colable_{fname}_end:\n")
     out.append(indent + "co->step = 0; // 复位状态机\n")
     out.append(indent + "if(father == NULL){ // 没有父协程则自己 free 自己\n")
@@ -803,13 +947,19 @@ def split_params(params_str):
             cur.append(ch)
     if cur:
         parts.append(''.join(cur).strip())
+
     res = []
     for p in parts:
         if not p:
             continue
-        toks = p.split()
-        if len(toks) >= 2:
-            res.append((' '.join(toks[:-1]), toks[-1]))
+        m = re.search(r'([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*$', p)
+        if not m:
+            continue
+        name = m.group(1)
+        type_part = p[:m.start(1)].rstrip()
+        if type_part.endswith('*') or type_part.endswith('&'):
+            type_part = type_part.rstrip() + ' '
+        res.append((type_part.strip(), name))
     return res
 
 # ================================================
@@ -888,6 +1038,7 @@ def process(input_file, enable_line):
         # 变量提升
         hoisted_body, promoted_dict = variable_hoisting_body(fn, tokens, source, param_names)
         promoted_vars = list(promoted_dict.values())
+        promoted_names = set(promoted_dict.keys())
 
         # 生成结构体定义
         struct_name = f"_coval_{fn['name']}"
@@ -959,7 +1110,8 @@ def process(input_file, enable_line):
 
         final_body = apply_state_machine(
             hoisted_body, fn['name'], fn['return_type'], param_names,
-            body_start_line, enable_line, src_basename
+            body_start_line, enable_line, src_basename,
+            promoted_names
         )
         impl_lines.append(final_body)
         impl_lines.append("")

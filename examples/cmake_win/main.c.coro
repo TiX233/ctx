@@ -5,7 +5,7 @@
  * 函数名称: task_wait_events
  * 返回类型: void
  * 起始行号: 18
- * 终止行号: 28
+ * 终止行号: 27
  * 
  * 参数: 
  *       int task_id
@@ -14,7 +14,7 @@
  *       uint8_t and_or
  * 
  * 需要持久化的局部变量: 
- *           uint32_t events_get
+ *           (无)
  */
 
 void _cocb_task_wait_events(struct coro_stu *co);
@@ -63,25 +63,25 @@ _colable_task_wait_events_0:
 
     
     printf("Task %d start, wait for 0x%08X(%s) in %d ticks.\n", _prv_data->task_id, _prv_data->events_wait_for, _prv_data->and_or?"OR":"AND", _prv_data->time_out);
-    
-    
+
     /* BEGIN: 检测到 _await 关键字，替换 */
     _co_ctx_wait_events(co, NULL, &events_test, _prv_data->time_out, _prv_data->events_wait_for, _prv_data->and_or);
     co->step = 1;
     return ; // 出让
 _colable_task_wait_events_1:
-    _prv_data->events_get = ((struct _coval_ctx_wait_events *)(co->son->prv_data))->_coretval_;
+    ;
+    uint32_t events_get = ((struct _coval_ctx_wait_events *)(co->son->prv_data))->_coretval_;
     // free 子协程对象
     ctx_mem_data_free(co->son->prv_data);
     ctx_mem_free(co->son);
     co->son = NULL;
     /* END: 检测到 _await 关键字，替换 */
 
-    if(ctx_Events_is_timeout(_prv_data->events_get)){
+    if(ctx_Events_is_timeout(events_get)){
         // 超时
-        printf("Task %d wait events timeout, now events: 0x%08X\n", _prv_data->task_id, _prv_data->events_get);
+        printf("Task %d wait events timeout, now events: 0x%08X\n", _prv_data->task_id, events_get);
     }else {
-        printf("Task %d wait events Okay: 0x%08X\n", _prv_data->task_id, _prv_data->events_get);
+        printf("Task %d wait events Okay: 0x%08X\n", _prv_data->task_id, events_get);
     }
 _colable_task_wait_events_end:
     co->step = 0; // 复位状态机
@@ -103,8 +103,8 @@ void _cocb_task_wait_events(struct coro_stu *co) {
  * 识别到 _async 关键字
  * 函数名称: task_events_publisher
  * 返回类型: void
- * 起始行号: 32
- * 终止行号: 41
+ * 起始行号: 31
+ * 终止行号: 40
  * 
  * 参数: 
  *       (无)
@@ -155,25 +155,22 @@ _colable_task_events_publisher_0:
     /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */
 
 
-    // 两秒后发布 0b0001
-    
-    /* BEGIN: 检测到 _await 关键字，替换 */
-    _co_delay_ticks(co, NULL, 200);
-    co->step = 1;
-    return ; // 出让
+
+/* BEGIN: 检测到 _await 关键字，替换 */
+_co_delay_ticks(co, NULL, 200);
+co->step = 1;
+return ; // 出让
 _colable_task_events_publisher_1:
-    /* 用户未接收返回值 */
-    // free 子协程对象
-    ctx_mem_data_free(co->son->prv_data);
-    ctx_mem_free(co->son);
-    co->son = NULL;
-    /* END: 检测到 _await 关键字，替换 */
+/* 用户未接收返回值 */
+// free 子协程对象
+ctx_mem_data_free(co->son->prv_data);
+ctx_mem_free(co->son);
+co->son = NULL;
+/* END: 检测到 _await 关键字，替换 */
 
     printf("    publish 0b0001\n");
     ctx_Events_publish(&events_test, 0x0001);
 
-    // 再过两秒发布 0b0110
-    
     /* BEGIN: 检测到 _await 关键字，替换 */
     _co_delay_ticks(co, NULL, 200);
     co->step = 2;

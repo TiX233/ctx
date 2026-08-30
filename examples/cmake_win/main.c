@@ -18,8 +18,7 @@ struct ctx_events_stu events_test;
 _async void task_wait_events(int task_id, uint32_t events_wait_for, TickType_t time_out, uint8_t and_or){
     
     printf("Task %d start, wait for 0x%08X(%s) in %d ticks.\n", task_id, events_wait_for, and_or?"OR":"AND", time_out);
-    uint32_t events_get;
-    events_get = _await ctx_wait_events(&events_test, time_out, events_wait_for, and_or);
+    uint32_t events_get = _await ctx_wait_events(&events_test, time_out, events_wait_for, and_or);
     if(ctx_Events_is_timeout(events_get)){
         // 超时
         printf("Task %d wait events timeout, now events: 0x%08X\n", task_id, events_get);

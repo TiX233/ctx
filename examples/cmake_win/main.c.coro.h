@@ -11,7 +11,7 @@ struct _coval_task_wait_events {
     uint8_t and_or;
 
     // 需要持久化的局部变量
-    uint32_t events_get;
+    // (无)
 
     // 返回值
     int _coretval_;
