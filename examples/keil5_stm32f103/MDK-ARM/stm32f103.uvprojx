@@ -63,7 +63,7 @@
           <BeforeCompile>
             <RunUserProg1>1</RunUserProg1>
             <RunUserProg2>0</RunUserProg2>
-            <UserProg1Name>python "..\ctx\coro_translater.py" "#F"</UserProg1Name>
+            <UserProg1Name>python "..\..\..\ctx\coro_translater.py" "#F"</UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
@@ -341,7 +341,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F103xB</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;../ltx;../ctx;../Core/Src</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;../ltx;..\..\..\ctx;../Core/Src</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -518,7 +518,7 @@
             <File>
               <FileName>ctx.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\ctx\ctx.c</FilePath>
+              <FilePath>..\..\..\ctx\ctx.c</FilePath>
             </File>
           </Files>
         </Group>

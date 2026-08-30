@@ -8,12 +8,12 @@ struct _coval_btn_check {
     // (无)
 
     // 需要持久化的局部变量
-    uint8_t flag_is_wait_topic_timeout;
+    // (无)
 
     // 返回值
     int _coretval_;
 };
 
-void _co_btn_check(struct coro_stu *father, struct coro_stu *co);
+struct coro_stu* _co_btn_check(struct coro_stu *father, struct coro_stu *co);
 
 #endif // APP_BTN_CORO_H_

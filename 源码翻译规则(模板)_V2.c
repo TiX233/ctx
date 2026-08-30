@@ -1,4 +1,8 @@
-// 新版（V2）规则在业务上兼容旧版（V1），也就是基本不需要修改业务代码，相较旧版减少了一层函数调用，减少了不必要的重复传参，提高效率
+// 新版（V2）与旧版（V1）的区别：
+//     1、业务上兼容旧版，也就是基本不需要修改业务代码
+//     2、减少了一层函数调用，减少了不必要的重复传参，提高运行效率
+//     3、_start_async 宏现在可以获取返回值（struct coro_stu*）了，也就是动态创建的任务可以获取到句柄，便于业务控制
+
 
 // _async 函数样例：
 
@@ -6,8 +10,7 @@ _async 返回类型 函数名(函数参数...){
     业务代码();
     _await 业务函数(参数...);
     _yield();
-    float data;
-    data  = _await 业务函数2(参数...);
+    float data  = _await_static(&obj) 业务函数2(参数...);
 
     return xxx;
 }
@@ -84,7 +87,6 @@ void _cocb_函数名(struct coro_stu *co){
     // label 必须顶格，便于区分
 _colabel_下一步骤编号:
     /* 如果用户未接收返回值，那么不需要生成下面这句：*/
-    // 用户接受收返回值时可能会附带有 type，例如 int a = _await 被调用函数名(); ，需要注意不要遗留 type
     用户接收返回值的变量 = ((struct _coval_被调用函数名 *)(co->son->prv_data))->_coretval_;
     // free 子协程对象
     ctx_mem_data_free(co->son->prv_data);
@@ -124,13 +126,13 @@ _colabel_下一步骤编号:
 
     // 在函数最后插入收尾操作
 _colabel_end:
-    co->step = 0; // 复位状态机
-    if(father == NULL){ // 没有父协程则自己 free 自己
+    // co->step = 0; // 复位状态机
+    if(co->father == NULL){ // 没有父协程则自己 free 自己
         ctx_mem_data_free(co->prv_data);
         ctx_mem_free(co);
     }else {
         // 唤醒父协程
-        ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+        ctx_coro_wake(co->father, 0); // 0 代表 0 tick 后唤醒
     }
 }
 

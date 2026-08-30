@@ -17,7 +17,7 @@ struct _coval_task_wait_events {
     int _coretval_;
 };
 
-void _co_task_wait_events(struct coro_stu *father, struct coro_stu *co, int task_id, uint32_t events_wait_for, TickType_t time_out, uint8_t and_or);
+struct coro_stu* _co_task_wait_events(struct coro_stu *father, struct coro_stu *co, int task_id, uint32_t events_wait_for, TickType_t time_out, uint8_t and_or);
 
 struct _coval_task_events_publisher {
     // 参数
@@ -30,6 +30,6 @@ struct _coval_task_events_publisher {
     int _coretval_;
 };
 
-void _co_task_events_publisher(struct coro_stu *father, struct coro_stu *co);
+struct coro_stu* _co_task_events_publisher(struct coro_stu *father, struct coro_stu *co);
 
 #endif // MAIN_CORO_H_

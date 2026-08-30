@@ -11,6 +11,8 @@ C 无栈协程 _async 源到源翻译器
 2026年 7月 6日: V0.4, 补充 _await_static 的设置子协程为 NULL 操作
 2026年 8月30日: V0.5, 修复循环体对变量作用域误判的问题; 修复异步等待结果时遗留变量类型的问题，并且优化相关变量作用域判断
 
+2026年 8月30日: V0.6, 转用 V2 版本翻译模板作为翻译规则
+
 用法: python coro_translater.py <input.c> [--line]
 输出：
   - <input.c>.coro.h   （结构体定义）
@@ -558,15 +560,12 @@ def determine_promoted(variables, yields, await_returns=None):
         refs_for_liveness = refs
         receiver_pos = await_returns.get(v.name)
         if receiver_pos is not None:
-            # If a different variable receives an awaited result later, any later use
-            # of this variable after that point is stale state from the old value and
-            # should not count as a real cross-yield liveness requirement.
             later_receive_positions = sorted(
                 pos for other_name, pos in await_returns.items() if other_name != v.name and pos > receiver_pos
             )
             if later_receive_positions:
                 cutoff = later_receive_positions[0]
-                refs_for_liveness = [r for r in refs if r < cutoff]
+                refs_for_liveness = [r for r in refs_for_liveness if r < cutoff]
                 if not refs_for_liveness:
                     continue
 
@@ -575,6 +574,10 @@ def determine_promoted(variables, yields, await_returns=None):
             before = any(ref < y for ref in refs_for_liveness)
             after = any(ref > y for ref in refs_for_liveness)
             if before and after:
+                hangs_across_yield = True
+                break
+
+            if receiver_pos is None and v.inside_loop and before and not after:
                 hangs_across_yield = True
                 break
 
@@ -651,7 +654,7 @@ def get_line_indent(text, pos):
 
 def apply_state_machine(hoisted_body, fname, ret_type, param_names,
                         body_start_line, enable_line, source_file,
-                        promoted_names=None):
+                        promoted_names=None, callback_mode=False):
     if promoted_names is None:
         promoted_names = set()
     body = hoisted_body
@@ -667,6 +670,14 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
     pattern_return = re.compile(r'return\s*(.*?)\s*;')
 
     def statement_start_for_pos(text, pos):
+        line_start = text.rfind('\n', 0, pos) + 1
+        line_text = text[line_start:pos]
+        # An awaited call is usually the right-hand side of its owning statement on the
+        # same line, e.g. "uint8_t x = _await foo();". In that case, the statement boundary
+        # must start at the beginning of the line, otherwise earlier comment/assignment text
+        # from the same block is incorrectly carried into the generated prefix.
+        if '=' in line_text:
+            return line_start
         i = pos
         while i > 0 and text[i - 1] not in ';{}':
             i -= 1
@@ -690,7 +701,6 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
                     k -= 1
                 prev_sig = expr[k] if k >= 0 else ''
 
-                # Already a member access like `_prv_data->sensor_data`; do not rewrite again.
                 if word == '_prv_data':
                     out.append(word)
                 elif word in promoted_names and prev_sig not in ('>', '.', '_'):
@@ -720,6 +730,22 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             return ' '.join(toks[:-1]), toks[-1]
         return '', toks[0] if toks else ''
 
+    def strip_trailing_await_assignment(prefix, recv_var):
+        if not prefix or not recv_var:
+            return prefix
+        if not prefix.strip():
+            return prefix
+        lines = prefix.splitlines(keepends=True)
+        if not lines:
+            return prefix
+        last = lines[-1]
+        if re.search(rf'\b{re.escape(recv_var)}\s*=', last):
+            lines.pop()
+            return ''.join(lines)
+        if re.search(rf'\b{re.escape(recv_var)}\s*=', prefix):
+            prefix = re.sub(rf'\s*\b{re.escape(recv_var)}\s*=\s*[^\n]*$', '', prefix)
+        return prefix
+
     matches = []
     for m in pattern_await.finditer(inner):
         decl_prefix, recv_var = extract_lhs_before_await(inner, m.start())
@@ -733,57 +759,67 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
         matches.append(('return', m, '', ''))
     matches.sort(key=lambda x: x[1].start())
 
+    label_prefix = "_colabel_" if callback_mode else f"_colable_{fname}_"
     step = 1
-    case_lines = [f"case 0: goto _colable_{fname}_0;"]
+    case_lines = []
     for typ, m, _, _ in matches:
         if typ in ('await', 'await_static', 'yield'):
-            case_lines.append(f"case {step}: goto _colable_{fname}_{step};")
+            case_lines.append(f"case {step}: goto {label_prefix}{step};")
             step += 1
 
     out = []
     indent = "    "
-    out.append("{\n")
-    out.append(indent + f"struct _coval_{fname} *_prv_data;\n")
-    out.append("\n")
-    out.append(indent + "// 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象\n")
-    out.append(indent + "if(co == NULL){\n")
-    out.append(indent + "    // 动态分配\n")
-    out.append(indent + "    co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));\n")
-    out.append(indent + "    if(co == NULL){\n")
-    out.append(indent + "        return ;\n")
-    out.append(indent + "    }\n")
-    out.append(indent + f"    co->prv_data = (struct _coval_{fname} *)ctx_mem_data_alloc(sizeof(struct _coval_{fname}));\n")
-    out.append(indent + "    if(co->prv_data == NULL){\n")
-    out.append(indent + "        ctx_mem_free(co);\n")
-    out.append(indent + "        return ;\n")
-    out.append(indent + "    }\n")
-    out.append(indent + "    co->step = 0;\n")
-    out.append(indent + "}\n")
-    out.append(indent + f"_prv_data = (struct _coval_{fname} *)co->prv_data;\n")
-    out.append("\n")
-    out.append(indent + "switch(co->step){\n")
-    for cl in case_lines:
-        out.append(indent + "    " + cl + "\n")
-    out.append(indent + "}\n")
-    out.append("\n")
-    out.append(indent + "// 步骤 0 用于初始化\n")
-    out.append(f"_colable_{fname}_0:\n")
-    out.append(indent + "// 初始化协程对象\n")
-    out.append(indent + "co->father = father;\n")
-    out.append(indent + "if(father != NULL) father->son = co;\n")
-    out.append(indent + f"// 配置状态机回调\n")
-    out.append(indent + f"ctx_coro_init(co, _cocb_{fname});\n")
-    out.append("\n")
-    out.append(indent + "/* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */\n")
-    if param_names:
-        for pn in param_names:
-            out.append(indent + f"_prv_data->{pn} = {pn};\n")
+    if callback_mode:
+        out.append(f"    struct _coval_{fname} *_prv_data = (struct _coval_{fname} *)co->prv_data;\n")
+        out.append("\n")
+        out.append("    switch(co->step){\n")
+        for cl in case_lines:
+            out.append("        " + cl + "\n")
+        out.append("    }\n")
+        out.append("\n")
     else:
-        out.append(indent + "/* 无参数需要初始化 */\n")
-    out.append(indent + "/* END: 根据实际情况生成不同的初始化参数和局部变量内容 */\n")
-    out.append("\n")
+        out.append("{\n")
+        out.append(indent + f"struct _coval_{fname} *_prv_data;\n")
+        out.append("\n")
+        out.append(indent + "// 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象\n")
+        out.append(indent + "if(co == NULL){\n")
+        out.append(indent + "    // 动态分配\n")
+        out.append(indent + "    co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));\n")
+        out.append(indent + "    if(co == NULL){\n")
+        out.append(indent + "        return ;\n")
+        out.append(indent + "    }\n")
+        out.append(indent + f"    co->prv_data = (struct _coval_{fname} *)ctx_mem_data_alloc(sizeof(struct _coval_{fname}));\n")
+        out.append(indent + "    if(co->prv_data == NULL){\n")
+        out.append(indent + "        ctx_mem_free(co);\n")
+        out.append(indent + "        return ;\n")
+        out.append(indent + "    }\n")
+        out.append(indent + "    co->step = 0;\n")
+        out.append(indent + "}\n")
+        out.append(indent + f"_prv_data = (struct _coval_{fname} *)co->prv_data;\n")
+        out.append("\n")
+        out.append(indent + "switch(co->step){\n")
+        for cl in case_lines:
+            out.append(indent + "    " + cl + "\n")
+        out.append(indent + "}\n")
+        out.append("\n")
+        out.append(indent + "// 步骤 0 用于初始化\n")
+        out.append(f"{label_prefix}0:\n")
+        out.append(indent + "// 初始化协程对象\n")
+        out.append(indent + "co->father = father;\n")
+        out.append(indent + "if(father != NULL) father->son = co;\n")
+        out.append(indent + f"// 配置状态机回调\n")
+        out.append(indent + f"ctx_coro_init(co, _cocb_{fname});\n")
+        out.append("\n")
+        out.append(indent + "/* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */\n")
+        if param_names:
+            for pn in param_names:
+                out.append(indent + f"_prv_data->{pn} = {pn};\n")
+        else:
+            out.append(indent + "/* 无参数需要初始化 */\n")
+        out.append(indent + "/* END: 根据实际情况生成不同的初始化参数和局部变量内容 */\n")
+        out.append("\n")
 
-    if enable_line:
+    if enable_line and not callback_mode:
         out.append(f'#line {body_start_line} "{source_file}"\n')
 
     last_end = 0
@@ -792,10 +828,13 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
         stmt_start = statement_start_for_pos(inner, m.start())
         stmt_end = m.end()
         prefix = inner[last_end:stmt_start]
+        prefix = strip_trailing_await_assignment(prefix, recv_var)
+        if prefix and prefix.strip() and not prefix.endswith('\n') and not prefix.endswith('\r'):
+            prefix += '\n'
         out.append(prefix)
 
-        orig_indent = get_line_indent(inner, stmt_start)
-        line_offset = inner[:stmt_start].count('\n')
+        orig_indent = get_line_indent(inner, m.start())
+        line_offset = inner[:m.start()].count('\n')
         line_num = body_start_line + line_offset
 
         if enable_line:
@@ -806,7 +845,7 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             out.append(orig_indent + "ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + "return ; // 出让\n")
-            out.append(f"_colable_{fname}_{step}:\n")
+            out.append(f"{label_prefix}{step}:\n")
             out.append(orig_indent + "/* END: 检测到 _yield 关键字，替换 */\n")
             if enable_line:
                 out.append(f'#line {line_num + 1} "{source_file}"\n')
@@ -825,14 +864,11 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             out.append(orig_indent + call_str + ";\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + "return ; // 出让\n")
-            out.append(f"_colable_{fname}_{step}:\n")
+            out.append(f"{label_prefix}{step}:\n")
             if recv_var:
                 if recv_var in promoted_names:
                     out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
                 elif decl_prefix:
-                    # C does not allow a declaration directly after a label unless it is
-                    # preceded by an empty statement. This is the resume-site pattern for
-                    # "type name = _await ...".
                     out.append(orig_indent + ";\n")
                     out.append(orig_indent + f"{decl_prefix} {recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
                 else:
@@ -862,14 +898,11 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             out.append(orig_indent + f"_co_{func}(co, {call_args});\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + "return ; // 出让\n")
-            out.append(f"_colable_{fname}_{step}:\n")
+            out.append(f"{label_prefix}{step}:\n")
             if recv_var:
                 if recv_var in promoted_names:
                     out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
                 elif decl_prefix:
-                    # C does not allow a declaration directly after a label unless it is
-                    # preceded by an empty statement. This is the resume-site pattern for
-                    # "type name = _await ...".
                     out.append(orig_indent + ";\n")
                     out.append(orig_indent + f"{decl_prefix} {recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
                 else:
@@ -886,12 +919,12 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             expr = m.group(1).strip()
             if ret_type == 'void' or ret_type == '':
                 out.append("\n" + orig_indent + "/* BEGIN: 检测到用户 return，替换 */\n")
-                out.append(orig_indent + f"goto _colable_{fname}_end;\n")
+                out.append(orig_indent + f"goto {label_prefix}end;\n")
                 out.append(orig_indent + "/* END: 检测到用户 return，替换 */\n")
             else:
                 assign = f"_prv_data->_coretval_ = {expr}; " if expr else ""
                 out.append("\n" + orig_indent + "/* BEGIN: 检测到用户 return xxx; 替换 */\n")
-                out.append(orig_indent + f"{assign}goto _colable_{fname}_end;\n")
+                out.append(orig_indent + f"{assign}goto {label_prefix}end;\n")
                 out.append(orig_indent + "/* END: 检测到用户 return xxx; 替换 */\n")
             if enable_line:
                 out.append(f'#line {line_num + 1} "{source_file}"\n')
@@ -899,28 +932,24 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
         last_end = stmt_end
 
     out.append(inner[last_end:])
-    out.append(f"_colable_{fname}_end:\n")
-    out.append(indent + "co->step = 0; // 复位状态机\n")
-    out.append(indent + "if(father == NULL){ // 没有父协程则自己 free 自己\n")
-    out.append(indent + indent + "ctx_mem_data_free(co->prv_data);\n")
-    out.append(indent + indent + "ctx_mem_free(co);\n")
-    out.append(indent + "}else {\n")
-    out.append(indent + indent + "// 唤醒父协程\n")
-    out.append(indent + indent + "ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒\n")
-    out.append(indent + "}\n")
-    out.append("}\n")
-
-    return ''.join(out)
-    out.append(f"_colable_{fname}_end:\n")
-    out.append(indent + "co->step = 0; // 复位状态机\n")
-    out.append(indent + "if(father == NULL){ // 没有父协程则自己 free 自己\n")
-    out.append(indent + indent + "ctx_mem_data_free(co->prv_data);\n")
-    out.append(indent + indent + "ctx_mem_free(co);\n")
-    out.append(indent + "}else {\n")
-    out.append(indent + indent + "// 唤醒父协程\n")
-    out.append(indent + indent + "ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒\n")
-    out.append(indent + "}\n")
-    out.append("}\n")
+    out.append(f"{label_prefix}end:\n")
+    out.append(indent + "// co->step = 0; // 复位状态机\n")
+    if callback_mode:
+        out.append(indent + "if(co->father == NULL){ // 没有父协程则自己 free 自己\n")
+        out.append(indent + indent + "ctx_mem_data_free(co->prv_data);\n")
+        out.append(indent + indent + "ctx_mem_free(co);\n")
+        out.append(indent + "}else {\n")
+        out.append(indent + indent + "// 唤醒父协程\n")
+        out.append(indent + indent + "ctx_coro_wake(co->father, 0); // 0 代表 0 tick 后唤醒\n")
+        out.append(indent + "}\n")
+    else:
+        out.append(indent + "if(father == NULL){ // 没有父协程则自己 free 自己\n")
+        out.append(indent + indent + "ctx_mem_data_free(co->prv_data);\n")
+        out.append(indent + indent + "ctx_mem_free(co);\n")
+        out.append(indent + "}else {\n")
+        out.append(indent + indent + "// 唤醒父协程\n")
+        out.append(indent + indent + "ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒\n")
+        out.append(indent + "}\n")
 
     return ''.join(out)
 
@@ -1094,35 +1123,71 @@ def process(input_file, enable_line):
         impl_lines.append(" */")
         impl_lines.append("")
 
-        impl_lines.append(f"void _cocb_{fn['name']}(struct coro_stu *co);")
-        impl_lines.append("")
-
         impl_lines.append("// ======== 翻译后的函数体 ========")
-        ret = 'void'
         param_str = fn['params']
         if param_str and param_str.strip() != 'void':
             new_params = f"struct coro_stu *father, struct coro_stu *co, {param_str}"
         else:
             new_params = "struct coro_stu *father, struct coro_stu *co"
-        impl_lines.append(f"{ret} _co_{fn['name']}({new_params})")
-        # 函数声明
-        h_lines.append(f"void _co_{fn['name']}({new_params});\n")
 
-        final_body = apply_state_machine(
+        callback_body = apply_state_machine(
             hoisted_body, fn['name'], fn['return_type'], param_names,
             body_start_line, enable_line, src_basename,
-            promoted_names
+            promoted_names, callback_mode=True
         )
-        impl_lines.append(final_body)
+        impl_lines.append(f"void _cocb_{fn['name']}(struct coro_stu *co) {{")
+        impl_lines.extend(callback_body.splitlines())
+        impl_lines.append("}")
         impl_lines.append("")
 
-        impl_lines.append(f"void _cocb_{fn['name']}(struct coro_stu *co) {{")
+        impl_lines.append(f"struct coro_stu* _co_{fn['name']}({new_params}) {{")
+        # 函数声明
+        h_lines.append(f"struct coro_stu* _co_{fn['name']}({new_params});\n")
+
+        impl_lines.append(f"    struct _coval_{fn['name']} *_prv_data;")
+        impl_lines.append("")
+        impl_lines.append("    // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象")
+        impl_lines.append("    if(co == NULL){")
+        impl_lines.append("        // 动态分配")
+        impl_lines.append("        co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));")
+        impl_lines.append("        if(co == NULL){")
+        impl_lines.append("            return NULL;")
+        impl_lines.append("        }")
+        impl_lines.append(f"        co->prv_data = (struct _coval_{fn['name']} *)ctx_mem_data_alloc(sizeof(struct _coval_{fn['name']}));")
+        impl_lines.append("        if(co->prv_data == NULL){")
+        impl_lines.append("            ctx_mem_free(co);")
+        impl_lines.append("            return NULL;")
+        impl_lines.append("        }")
+        impl_lines.append("    }")
+        impl_lines.append(f"    _prv_data = (struct _coval_{fn['name']} *)co->prv_data;")
+        impl_lines.append("")
+        impl_lines.append("    // 初始化协程对象")
+        impl_lines.append("    co->father = father;")
+        impl_lines.append("    // 配置状态机回调")
+        impl_lines.append(f"    ctx_coro_init(co, _cocb_{fn['name']});")
+        impl_lines.append("")
+        impl_lines.append("    /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */")
         if param_pairs:
-            args = ', '.join([f"((struct {struct_name} *)co->prv_data)->{n}" for _, n in param_pairs])
-            impl_lines.append(f"    _co_{fn['name']}(co->father, co, {args});")
+            for t, n in param_pairs:
+                impl_lines.append(f"    _prv_data->{n} = {n};")
         else:
-            impl_lines.append(f"    _co_{fn['name']}(co->father, co);")
+            impl_lines.append("    /* 无参数需要初始化 */")
+        impl_lines.append("    /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */")
+        impl_lines.append("")
+        impl_lines.append("    // 运行/启动该任务")
+        impl_lines.append("    co->step = 0;")
+        impl_lines.append("    if(father != NULL){")
+        impl_lines.append("        father->son = co;")
+        impl_lines.append("        // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数")
+        impl_lines.append(f"        _cocb_{fn['name']}(co);")
+        impl_lines.append("    }else {")
+        impl_lines.append("        // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制")
+        impl_lines.append("        ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒")
+        impl_lines.append("    }")
+        impl_lines.append("")
+        impl_lines.append("    return co;")
         impl_lines.append("}")
+        impl_lines.append("")
 
         c_lines.extend(impl_lines)
         c_lines.append("")

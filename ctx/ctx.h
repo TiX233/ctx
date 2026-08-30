@@ -34,7 +34,9 @@
 
 // 非 _async 函数启动 _async 函数需要使用此宏，或者 _async 函数启动一个与自己无关的任务
 // obj_ptr 传入 NULL 表示动态创建，执行完毕后会自动释放
+// 使用 V0.6 及以上版本的 coro_translater.py 作为翻译脚本则该宏可以获取返回值，也就是 co 对象指针，便于操作动态创建的对象
 #define _start_async(obj_ptr, func, ...)    _co_##func(NULL, obj_ptr, ##__VA_ARGS__)
+
 // 对转译后的函数进行声明可以使用此宏
 // 一般不需要手动声明，翻译脚本会创建好函数声明
 #define cof_define(func, ...)               void _co_##func(struct coro_stu *father, struct coro_stu *co, ##__VA_ARGS__)

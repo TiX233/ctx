@@ -17,58 +17,24 @@
  *           (无)
  */
 
-void _cocb_task_wait_events(struct coro_stu *co);
-
 // ======== 翻译后的函数体 ========
-void _co_task_wait_events(struct coro_stu *father, struct coro_stu *co, int task_id, uint32_t events_wait_for, TickType_t time_out, uint8_t and_or)
-{
-    struct _coval_task_wait_events *_prv_data;
-
-    // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象
-    if(co == NULL){
-        // 动态分配
-        co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));
-        if(co == NULL){
-            return ;
-        }
-        co->prv_data = (struct _coval_task_wait_events *)ctx_mem_data_alloc(sizeof(struct _coval_task_wait_events));
-        if(co->prv_data == NULL){
-            ctx_mem_free(co);
-            return ;
-        }
-        co->step = 0;
-    }
-    _prv_data = (struct _coval_task_wait_events *)co->prv_data;
+void _cocb_task_wait_events(struct coro_stu *co) {
+    struct _coval_task_wait_events *_prv_data = (struct _coval_task_wait_events *)co->prv_data;
 
     switch(co->step){
-        case 0: goto _colable_task_wait_events_0;
-        case 1: goto _colable_task_wait_events_1;
+        case 1: goto _colabel_1;
     }
-
-    // 步骤 0 用于初始化
-_colable_task_wait_events_0:
-    // 初始化协程对象
-    co->father = father;
-    if(father != NULL) father->son = co;
-    // 配置状态机回调
-    ctx_coro_init(co, _cocb_task_wait_events);
-
-    /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */
-    _prv_data->task_id = task_id;
-    _prv_data->events_wait_for = events_wait_for;
-    _prv_data->time_out = time_out;
-    _prv_data->and_or = and_or;
-    /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */
 
 
     
     printf("Task %d start, wait for 0x%08X(%s) in %d ticks.\n", _prv_data->task_id, _prv_data->events_wait_for, _prv_data->and_or?"OR":"AND", _prv_data->time_out);
 
+
     /* BEGIN: 检测到 _await 关键字，替换 */
     _co_ctx_wait_events(co, NULL, &events_test, _prv_data->time_out, _prv_data->events_wait_for, _prv_data->and_or);
     co->step = 1;
     return ; // 出让
-_colable_task_wait_events_1:
+_colabel_1:
     ;
     uint32_t events_get = ((struct _coval_ctx_wait_events *)(co->son->prv_data))->_coretval_;
     // free 子协程对象
@@ -83,21 +49,61 @@ _colable_task_wait_events_1:
     }else {
         printf("Task %d wait events Okay: 0x%08X\n", _prv_data->task_id, events_get);
     }
-_colable_task_wait_events_end:
-    co->step = 0; // 复位状态机
-    if(father == NULL){ // 没有父协程则自己 free 自己
+_colabel_end:
+    // co->step = 0; // 复位状态机
+    if(co->father == NULL){ // 没有父协程则自己 free 自己
         ctx_mem_data_free(co->prv_data);
         ctx_mem_free(co);
     }else {
         // 唤醒父协程
-        ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+        ctx_coro_wake(co->father, 0); // 0 代表 0 tick 后唤醒
     }
 }
 
+struct coro_stu* _co_task_wait_events(struct coro_stu *father, struct coro_stu *co, int task_id, uint32_t events_wait_for, TickType_t time_out, uint8_t and_or) {
+    struct _coval_task_wait_events *_prv_data;
 
-void _cocb_task_wait_events(struct coro_stu *co) {
-    _co_task_wait_events(co->father, co, ((struct _coval_task_wait_events *)co->prv_data)->task_id, ((struct _coval_task_wait_events *)co->prv_data)->events_wait_for, ((struct _coval_task_wait_events *)co->prv_data)->time_out, ((struct _coval_task_wait_events *)co->prv_data)->and_or);
+    // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象
+    if(co == NULL){
+        // 动态分配
+        co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));
+        if(co == NULL){
+            return NULL;
+        }
+        co->prv_data = (struct _coval_task_wait_events *)ctx_mem_data_alloc(sizeof(struct _coval_task_wait_events));
+        if(co->prv_data == NULL){
+            ctx_mem_free(co);
+            return NULL;
+        }
+    }
+    _prv_data = (struct _coval_task_wait_events *)co->prv_data;
+
+    // 初始化协程对象
+    co->father = father;
+    // 配置状态机回调
+    ctx_coro_init(co, _cocb_task_wait_events);
+
+    /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */
+    _prv_data->task_id = task_id;
+    _prv_data->events_wait_for = events_wait_for;
+    _prv_data->time_out = time_out;
+    _prv_data->and_or = and_or;
+    /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */
+
+    // 运行/启动该任务
+    co->step = 0;
+    if(father != NULL){
+        father->son = co;
+        // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
+        _cocb_task_wait_events(co);
+    }else {
+        // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
+        ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
+    }
+
+    return co;
 }
+
 
 /**
  * 识别到 _async 关键字
@@ -113,69 +119,38 @@ void _cocb_task_wait_events(struct coro_stu *co) {
  *           (无)
  */
 
-void _cocb_task_events_publisher(struct coro_stu *co);
-
 // ======== 翻译后的函数体 ========
-void _co_task_events_publisher(struct coro_stu *father, struct coro_stu *co)
-{
-    struct _coval_task_events_publisher *_prv_data;
-
-    // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象
-    if(co == NULL){
-        // 动态分配
-        co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));
-        if(co == NULL){
-            return ;
-        }
-        co->prv_data = (struct _coval_task_events_publisher *)ctx_mem_data_alloc(sizeof(struct _coval_task_events_publisher));
-        if(co->prv_data == NULL){
-            ctx_mem_free(co);
-            return ;
-        }
-        co->step = 0;
-    }
-    _prv_data = (struct _coval_task_events_publisher *)co->prv_data;
+void _cocb_task_events_publisher(struct coro_stu *co) {
+    struct _coval_task_events_publisher *_prv_data = (struct _coval_task_events_publisher *)co->prv_data;
 
     switch(co->step){
-        case 0: goto _colable_task_events_publisher_0;
-        case 1: goto _colable_task_events_publisher_1;
-        case 2: goto _colable_task_events_publisher_2;
+        case 1: goto _colabel_1;
+        case 2: goto _colabel_2;
     }
 
-    // 步骤 0 用于初始化
-_colable_task_events_publisher_0:
-    // 初始化协程对象
-    co->father = father;
-    if(father != NULL) father->son = co;
-    // 配置状态机回调
-    ctx_coro_init(co, _cocb_task_events_publisher);
-
-    /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */
-    /* 无参数需要初始化 */
-    /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */
 
 
-
-/* BEGIN: 检测到 _await 关键字，替换 */
-_co_delay_ticks(co, NULL, 200);
-co->step = 1;
-return ; // 出让
-_colable_task_events_publisher_1:
-/* 用户未接收返回值 */
-// free 子协程对象
-ctx_mem_data_free(co->son->prv_data);
-ctx_mem_free(co->son);
-co->son = NULL;
-/* END: 检测到 _await 关键字，替换 */
+    /* BEGIN: 检测到 _await 关键字，替换 */
+    _co_delay_ticks(co, NULL, 200);
+    co->step = 1;
+    return ; // 出让
+_colabel_1:
+    /* 用户未接收返回值 */
+    // free 子协程对象
+    ctx_mem_data_free(co->son->prv_data);
+    ctx_mem_free(co->son);
+    co->son = NULL;
+    /* END: 检测到 _await 关键字，替换 */
 
     printf("    publish 0b0001\n");
     ctx_Events_publish(&events_test, 0x0001);
+
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     _co_delay_ticks(co, NULL, 200);
     co->step = 2;
     return ; // 出让
-_colable_task_events_publisher_2:
+_colabel_2:
     /* 用户未接收返回值 */
     // free 子协程对象
     ctx_mem_data_free(co->son->prv_data);
@@ -185,18 +160,55 @@ _colable_task_events_publisher_2:
 
     printf("    publish 0b0110\n");
     ctx_Events_publish(&events_test, 0x0006);
-_colable_task_events_publisher_end:
-    co->step = 0; // 复位状态机
-    if(father == NULL){ // 没有父协程则自己 free 自己
+_colabel_end:
+    // co->step = 0; // 复位状态机
+    if(co->father == NULL){ // 没有父协程则自己 free 自己
         ctx_mem_data_free(co->prv_data);
         ctx_mem_free(co);
     }else {
         // 唤醒父协程
-        ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+        ctx_coro_wake(co->father, 0); // 0 代表 0 tick 后唤醒
     }
 }
 
+struct coro_stu* _co_task_events_publisher(struct coro_stu *father, struct coro_stu *co) {
+    struct _coval_task_events_publisher *_prv_data;
 
-void _cocb_task_events_publisher(struct coro_stu *co) {
-    _co_task_events_publisher(co->father, co);
+    // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象
+    if(co == NULL){
+        // 动态分配
+        co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));
+        if(co == NULL){
+            return NULL;
+        }
+        co->prv_data = (struct _coval_task_events_publisher *)ctx_mem_data_alloc(sizeof(struct _coval_task_events_publisher));
+        if(co->prv_data == NULL){
+            ctx_mem_free(co);
+            return NULL;
+        }
+    }
+    _prv_data = (struct _coval_task_events_publisher *)co->prv_data;
+
+    // 初始化协程对象
+    co->father = father;
+    // 配置状态机回调
+    ctx_coro_init(co, _cocb_task_events_publisher);
+
+    /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */
+    /* 无参数需要初始化 */
+    /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */
+
+    // 运行/启动该任务
+    co->step = 0;
+    if(father != NULL){
+        father->son = co;
+        // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
+        _cocb_task_events_publisher(co);
+    }else {
+        // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
+        ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
+    }
+
+    return co;
 }
+

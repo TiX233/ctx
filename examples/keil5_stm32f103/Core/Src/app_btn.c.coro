@@ -11,62 +11,32 @@
  *       (无)
  * 
  * 需要持久化的局部变量: 
- *           uint8_t flag_is_wait_topic_timeout
+ *           (无)
  */
 
-void _cocb_btn_check(struct coro_stu *co);
-
 // ======== 翻译后的函数体 ========
-void _co_btn_check(struct coro_stu *father, struct coro_stu *co)
-{
-    struct _coval_btn_check *_prv_data;
-
-    // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象
-    if(co == NULL){
-        // 动态分配
-        co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));
-        if(co == NULL){
-            return ;
-        }
-        co->prv_data = (struct _coval_btn_check *)ctx_mem_data_alloc(sizeof(struct _coval_btn_check));
-        if(co->prv_data == NULL){
-            ctx_mem_free(co);
-            return ;
-        }
-        co->step = 0;
-    }
-    _prv_data = (struct _coval_btn_check *)co->prv_data;
+void _cocb_btn_check(struct coro_stu *co) {
+    struct _coval_btn_check *_prv_data = (struct _coval_btn_check *)co->prv_data;
 
     switch(co->step){
-        case 0: goto _colable_btn_check_0;
-        case 1: goto _colable_btn_check_1;
-        case 2: goto _colable_btn_check_2;
-        case 3: goto _colable_btn_check_3;
+        case 1: goto _colabel_1;
+        case 2: goto _colabel_2;
+        case 3: goto _colabel_3;
     }
-
-    // 步骤 0 用于初始化
-_colable_btn_check_0:
-    // 初始化协程对象
-    co->father = father;
-    if(father != NULL) father->son = co;
-    // 配置状态机回调
-    ctx_coro_init(co, _cocb_btn_check);
-
-    /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */
-    /* 无参数需要初始化 */
-    /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */
 
 
 
     while(1){
         // 以最大时限等待按键单击事件
-        
+
+
         /* BEGIN: 检测到 _await 关键字，替换 */
         _co_wait_topic(co, NULL, &topic_btn_click, -1);
         co->step = 1;
         return ; // 出让
-_colable_btn_check_1:
-        _prv_data->flag_is_wait_topic_timeout = ((struct _coval_wait_topic *)(co->son->prv_data))->_coretval_;
+_colabel_1:
+        ;
+        uint8_t flag_is_wait_topic_timeout = ((struct _coval_wait_topic *)(co->son->prv_data))->_coretval_;
         // free 子协程对象
         ctx_mem_data_free(co->son->prv_data);
         ctx_mem_free(co->son);
@@ -74,14 +44,14 @@ _colable_btn_check_1:
         /* END: 检测到 _await 关键字，替换 */
 
        
-        if(_prv_data->flag_is_wait_topic_timeout){ // 如果等待按键单击事件超时
-            // 快速闪烁十次 led2，动态创建
-            
+        if(flag_is_wait_topic_timeout){
+
+
             /* BEGIN: 检测到 _await 关键字，替换 */
             _co_led_blink(co, NULL, 2, 100, 10);
             co->step = 2;
             return ; // 出让
-_colable_btn_check_2:
+_colabel_2:
             /* 用户未接收返回值 */
             // free 子协程对象
             ctx_mem_data_free(co->son->prv_data);
@@ -89,14 +59,14 @@ _colable_btn_check_2:
             co->son = NULL;
             /* END: 检测到 _await 关键字，替换 */
 
-        }else { // 在时限内发生了按键单机时间
-            // 快速闪烁三次 led2，动态创建
-            
+        }else {
+
+
             /* BEGIN: 检测到 _await 关键字，替换 */
             _co_led_blink(co, NULL, 2, 150, 3);
             co->step = 3;
             return ; // 出让
-_colable_btn_check_3:
+_colabel_3:
             /* 用户未接收返回值 */
             // free 子协程对象
             ctx_mem_data_free(co->son->prv_data);
@@ -106,18 +76,55 @@ _colable_btn_check_3:
 
         }
     }
-_colable_btn_check_end:
-    co->step = 0; // 复位状态机
-    if(father == NULL){ // 没有父协程则自己 free 自己
+_colabel_end:
+    // co->step = 0; // 复位状态机
+    if(co->father == NULL){ // 没有父协程则自己 free 自己
         ctx_mem_data_free(co->prv_data);
         ctx_mem_free(co);
     }else {
         // 唤醒父协程
-        ctx_coro_wake(father, 0); // 0 代表 0 tick 后唤醒
+        ctx_coro_wake(co->father, 0); // 0 代表 0 tick 后唤醒
     }
 }
 
+struct coro_stu* _co_btn_check(struct coro_stu *father, struct coro_stu *co) {
+    struct _coval_btn_check *_prv_data;
 
-void _cocb_btn_check(struct coro_stu *co) {
-    _co_btn_check(co->father, co);
+    // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象
+    if(co == NULL){
+        // 动态分配
+        co = (struct coro_stu *)ctx_mem_alloc(sizeof(struct coro_stu));
+        if(co == NULL){
+            return NULL;
+        }
+        co->prv_data = (struct _coval_btn_check *)ctx_mem_data_alloc(sizeof(struct _coval_btn_check));
+        if(co->prv_data == NULL){
+            ctx_mem_free(co);
+            return NULL;
+        }
+    }
+    _prv_data = (struct _coval_btn_check *)co->prv_data;
+
+    // 初始化协程对象
+    co->father = father;
+    // 配置状态机回调
+    ctx_coro_init(co, _cocb_btn_check);
+
+    /* BEGIN: 根据实际情况生成不同的初始化参数变量内容 */
+    /* 无参数需要初始化 */
+    /* END: 根据实际情况生成不同的初始化参数和局部变量内容 */
+
+    // 运行/启动该任务
+    co->step = 0;
+    if(father != NULL){
+        father->son = co;
+        // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
+        _cocb_btn_check(co);
+    }else {
+        // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
+        ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
+    }
+
+    return co;
 }
+
