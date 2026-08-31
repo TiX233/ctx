@@ -46,7 +46,7 @@
 
 // 对转译后的函数进行声明可以使用此宏
 // 一般不需要手动声明，翻译脚本会创建好函数声明
-#define cof_define(func, ...)               void _co_##func(struct coro_stu *father, struct coro_stu *co, ##__VA_ARGS__)
+#define cof_define(func, ...)               struct coro_stu * _co_##func(struct coro_stu *father, struct coro_stu *co, ##__VA_ARGS__)
 
 
 // 协程对象
