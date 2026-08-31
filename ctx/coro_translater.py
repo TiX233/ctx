@@ -12,6 +12,7 @@ C 无栈协程 _async 源到源翻译器
 2026年 8月30日: V0.5, 修复循环体对变量作用域误判的问题; 修复异步等待结果时遗留变量类型的问题，并且优化相关变量作用域判断
 
 2026年 8月30日: V0.6, 转用 V2 版本翻译模板作为翻译规则
+2026年 8月31日: V0.7, 变更变量作用域判断方法，使用起止行号与异步关键字行号决定是否提升变量生命周期
 
 用法: python coro_translater.py <input.c> [--line]
 输出：
@@ -23,6 +24,7 @@ C 无栈协程 _async 源到源翻译器
 import sys
 import re
 import os
+import json
 
 # ================================================
 # 词法分析器
@@ -385,6 +387,8 @@ class VarInfo:
         self.refs = []
         self.inside_loop = False
         self.in_for_header = False
+        self.addr_taken = False
+        self.last_use_line = None
 
 # ================================================
 # 递归作用域分析
@@ -422,9 +426,14 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
             close = find_matching_brace(tokens, idx, rbrace)
             inner_vars, inner_yields, inner_await_returns = analyze_scope(tokens, idx, close, source, in_loop, variables)
             for iv in inner_vars:
-                iv.inside_loop = iv.inside_loop or in_loop
-                variables = [v for v in variables if v.name != iv.name]
-                variables.append(iv)
+                existing = next((v for v in variables if v.name == iv.name and v.decl_start == iv.decl_start), None)
+                if existing is None:
+                    variables.append(iv)
+                else:
+                    existing.refs = list(iv.refs)
+                    existing.addr_taken = iv.addr_taken or existing.addr_taken
+                    existing.inside_loop = existing.inside_loop or iv.inside_loop
+                    existing.scope_end = max(existing.scope_end, iv.scope_end)
             yields.extend(inner_yields)
             await_returns.update(inner_await_returns)
             idx = close + 1
@@ -441,7 +450,7 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
                 vlist, nxt = try_parse_declaration(tokens, idx, rbrace, source)
                 if vlist:
                     for v in vlist:
-                        vi = VarInfo(v['type'], v['name'], v['decl_start'], v['decl_end'], 0, v['name_token_idx'], v.get('init'))
+                        vi = VarInfo(v['type'], v['name'], v['decl_start'], v['decl_end'], v['decl_end'], v['name_token_idx'], v.get('init'))
                         vi.in_for_header = True
                         for_head_vars.append(vi)
                     idx = nxt
@@ -457,16 +466,38 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
                 inner_in_loop = in_loop or is_loop
                 inner_vars, inner_yields, inner_await_returns = analyze_scope(tokens, idx, close, source, inner_in_loop, variables)
                 for iv in inner_vars:
-                    iv.inside_loop = iv.inside_loop or inner_in_loop
-                    variables = [v for v in variables if v.name != iv.name]
-                    variables.append(iv)
+                    existing = next((v for v in variables if v.name == iv.name and v.decl_start == iv.decl_start), None)
+                    if existing is None:
+                        variables.append(iv)
+                    else:
+                        existing.refs = list(iv.refs)
+                        existing.addr_taken = iv.addr_taken or existing.addr_taken
+                        existing.inside_loop = existing.inside_loop or iv.inside_loop
+                        existing.scope_end = max(existing.scope_end, iv.scope_end)
+                    last_ref_line = None
+                    if iv.refs:
+                        ref_lines = [source.count('\n', 0, tokens[r][2]) + 1 for r in iv.refs if r < len(tokens)]
+                        if ref_lines:
+                            last_ref_line = max(ref_lines)
+                    if last_ref_line is not None:
+                        block_start_line = source.count('\n', 0, tokens[idx][2]) + 1
+                        block_end_line = source.count('\n', 0, tokens[close][2]) + 1
+                        if block_start_line <= last_ref_line <= block_end_line:
+                            target = existing if existing is not None else iv
+                            target.scope_end = close
                 yields.extend(inner_yields)
                 await_returns.update(inner_await_returns)
                 for vi in for_head_vars:
                     vi.scope_end = close
                     vi.inside_loop = True
-                    variables = [v for v in variables if v.name != vi.name]
-                    variables.append(vi)
+                    existing = next((v for v in variables if v.name == vi.name and v.decl_start == vi.decl_start), None)
+                    if existing is None:
+                        variables.append(vi)
+                    else:
+                        existing.refs = list(vi.refs)
+                        existing.addr_taken = vi.addr_taken or existing.addr_taken
+                        existing.inside_loop = existing.inside_loop or vi.inside_loop
+                        existing.scope_end = max(existing.scope_end, vi.scope_end)
                 idx = close + 1
                 if kw == 'do':
                     idx = skip_whitespace(tokens, idx, rbrace)
@@ -508,7 +539,7 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
         if vlist:
             decl_end = vlist[0]['decl_end']
             for v in vlist:
-                vi = VarInfo(v['type'], v['name'], decl_start, decl_end, rbrace, v['name_token_idx'], v.get('init'))
+                vi = VarInfo(v['type'], v['name'], decl_start, decl_end, decl_end, v['name_token_idx'], v.get('init'))
                 vi.inside_loop = in_loop
                 if vi.init is not None and '_await' in vi.init:
                     await_returns[vi.name] = idx
@@ -525,63 +556,76 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
                 if v.name == name:
                     if i == v.name_token_idx:
                         break
-                    if i <= v.scope_end:
-                        v.refs.append(i)
-                        if in_loop:
-                            v.inside_loop = True
+                    v.refs.append(i)
+                    v.scope_end = max(v.scope_end, i)
+                    line_no = source.count('\n', 0, tok[2]) + 1
+                    if v.last_use_line is None or line_no > v.last_use_line:
+                        v.last_use_line = line_no
+                    if in_loop:
+                        v.inside_loop = True
                     break
         elif tok[0] == 'other' and tok[1] == '&':
             j = i + 1
             j = skip_whitespace(tokens, j, rbrace)
             if j <= rbrace and tokens[j][0] == 'identifier':
                 for v in reversed(variables):
-                    if v.name == tokens[j][1] and j <= v.scope_end:
+                    if v.name == tokens[j][1]:
                         v.refs.append(j)
+                        v.scope_end = max(v.scope_end, j)
+                        line_no = source.count('\n', 0, tokens[j][2]) + 1
+                        if v.last_use_line is None or line_no > v.last_use_line:
+                            v.last_use_line = line_no
+                        v.addr_taken = True
                         break
 
     return variables, yields, await_returns
 
-def determine_promoted(variables, yields, await_returns=None):
+def get_scope_debug_records(variables, yields, await_returns, tokens, source):
+    records = []
+    async_lines = sorted({source.count('\n', 0, tokens[idx][2]) + 1 for idx in yields})
+    for v in variables:
+        decl_line = source[:tokens[v.decl_start][2]].count('\n') + 1 if v.decl_start < len(tokens) else 1
+        decl_end_line = source[:tokens[v.decl_end][3]].count('\n') + 1 if v.decl_end < len(tokens) else decl_line
+        scope_end_line = source[:tokens[v.scope_end][3]].count('\n') + 1 if v.scope_end < len(tokens) else decl_end_line
+        receiver_pos = await_returns.get(v.name)
+        has_async_span = any(decl_line < line <= scope_end_line for line in async_lines)
+        records.append({
+            'name': v.name,
+            'type': v.type,
+            'decl_start': v.decl_start,
+            'decl_end': v.decl_end,
+            'scope_end': v.scope_end,
+            'decl_line': decl_line,
+            'decl_end_line': decl_end_line,
+            'scope_end_line': scope_end_line,
+            'addr_taken': getattr(v, 'addr_taken', False),
+            'inside_loop': v.inside_loop,
+            'await_receiver_at': receiver_pos,
+            'refs': list(v.refs),
+            'async_keyword_lines': async_lines,
+            'has_async_span': has_async_span,
+            'same_statement_await': receiver_pos is not None and receiver_pos <= v.decl_end,
+        })
+    return records
+
+
+def determine_promoted(variables, yields, await_returns=None, tokens=None, source=None):
     if await_returns is None:
         await_returns = {}
+    if tokens is None or source is None:
+        return {}
+    async_lines = sorted({source.count('\n', 0, tokens[idx][2]) + 1 for idx in yields})
     promoted = {}
+
     for v in variables:
-        if not v.refs:
+        if getattr(v, 'addr_taken', False):
+            promoted[v.name] = v
             continue
 
-        refs = [r for r in v.refs if r > v.decl_end]
-        if not refs:
-            continue
-
-        relevant_yields = [y for y in yields if v.decl_start < y <= v.scope_end]
-        if not relevant_yields:
-            continue
-
-        refs_for_liveness = refs
-        receiver_pos = await_returns.get(v.name)
-        if receiver_pos is not None:
-            later_receive_positions = sorted(
-                pos for other_name, pos in await_returns.items() if other_name != v.name and pos > receiver_pos
-            )
-            if later_receive_positions:
-                cutoff = later_receive_positions[0]
-                refs_for_liveness = [r for r in refs_for_liveness if r < cutoff]
-                if not refs_for_liveness:
-                    continue
-
-        hangs_across_yield = False
-        for y in relevant_yields:
-            before = any(ref < y for ref in refs_for_liveness)
-            after = any(ref > y for ref in refs_for_liveness)
-            if before and after:
-                hangs_across_yield = True
-                break
-
-            if receiver_pos is None and v.inside_loop and before and not after:
-                hangs_across_yield = True
-                break
-
-        if hangs_across_yield:
+        decl_line = source[:tokens[v.decl_start][2]].count('\n') + 1 if v.decl_start < len(tokens) else 1
+        scope_end_line = source[:tokens[v.scope_end][3]].count('\n') + 1 if v.scope_end < len(tokens) else decl_line
+        has_async_span = any(decl_line < line <= scope_end_line for line in async_lines)
+        if has_async_span:
             promoted[v.name] = v
 
     return promoted
@@ -593,7 +637,7 @@ def variable_hoisting_body(func_info, tokens, source, param_names):
     lbrace = func_info['lbrace']
     rbrace = func_info['rbrace']
     variables, yields, await_returns = analyze_scope(tokens, lbrace, rbrace, source, in_loop=False)
-    promoted = determine_promoted(variables, yields, await_returns)
+    promoted = determine_promoted(variables, yields, await_returns, tokens=tokens, source=source)
 
     replace_names = set(promoted.keys()) | set(param_names)
 
@@ -842,8 +886,8 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
 
         if typ == 'yield':
             out.append("\n" + orig_indent + "/* BEGIN: 检测到 _yield 关键字，替换 */\n")
-            out.append(orig_indent + "ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒\n")
             out.append(orig_indent + f"co->step = {step};\n")
+            out.append(orig_indent + "ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒\n")
             out.append(orig_indent + "return ; // 出让\n")
             out.append(f"{label_prefix}{step}:\n")
             out.append(orig_indent + "/* END: 检测到 _yield 关键字，替换 */\n")
@@ -861,8 +905,8 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             else:
                 call_str = f"_co_{func}(co, NULL)"
             out.append("\n\n" + orig_indent + "/* BEGIN: 检测到 _await 关键字，替换 */\n")
-            out.append(orig_indent + call_str + ";\n")
             out.append(orig_indent + f"co->step = {step};\n")
+            out.append(orig_indent + call_str + ";\n")
             out.append(orig_indent + "return ; // 出让\n")
             out.append(f"{label_prefix}{step}:\n")
             if recv_var:
@@ -895,8 +939,8 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             else:
                 call_args = rewritten_obj
             out.append("\n\n" + orig_indent + "/* BEGIN: 检测到 _await_static 关键字，替换 */\n")
-            out.append(orig_indent + f"_co_{func}(co, {call_args});\n")
             out.append(orig_indent + f"co->step = {step};\n")
+            out.append(orig_indent + f"_co_{func}(co, {call_args});\n")
             out.append(orig_indent + "return ; // 出让\n")
             out.append(f"{label_prefix}{step}:\n")
             if recv_var:
@@ -1027,7 +1071,7 @@ def generate_output(input_file, enable_line):
     # 调整：直接使用上面提取的 funcs 和 tokens（但 tokens 是局部变量，需在函数内传递）
     # 我们把整体逻辑写在一个主函数中。
 
-def process(input_file, enable_line):
+def process(input_file, enable_line, debug_scope=False, debug_path=None):
     with open(input_file, 'r', encoding='utf-8') as f:
         source = f.read()
     funcs, tokens = extract_async_functions(source)
@@ -1035,6 +1079,24 @@ def process(input_file, enable_line):
     if not funcs:
         # print("No _async functions detected. No files generated.")
         return
+
+    if debug_scope:
+        debug_records = []
+        for fn in funcs:
+            variables, yields, await_returns = analyze_scope(tokens, fn['lbrace'], fn['rbrace'], source, in_loop=False)
+            debug_records.append({
+                'func': fn['name'],
+                'start_line': source[:tokens[fn['lbrace']][2]].count('\n') + 1,
+                'end_line': source[:tokens[fn['rbrace']][3]].count('\n') + 1,
+                'variables': get_scope_debug_records(variables, yields, await_returns, tokens, source),
+            })
+        payload = {'functions': debug_records}
+        if debug_path:
+            with open(debug_path, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            print(f"Scope debug JSON written to: {debug_path}")
+        else:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
 
     base = os.path.splitext(input_file)[0]
     h_file = base + '.c.coro.h'
@@ -1120,6 +1182,16 @@ def process(input_file, enable_line):
                 impl_lines.append(f" *           {v.type} {v.name}")
         else:
             impl_lines.append(" *           (无)")
+        impl_lines.append(" * ")
+        impl_lines.append(" * 局部变量作用域详情: ")
+        variables, yields, await_returns = analyze_scope(tokens, fn['lbrace'], fn['rbrace'], source, in_loop=False)
+        async_lines = sorted({source.count('\n', 0, tokens[idx][2]) + 1 for idx in yields})
+        impl_lines.append(f" *   异步关键字捕获行号: {', '.join(map(str, async_lines))}")
+        debug_vars = get_scope_debug_records(variables, yields, await_returns, tokens, source)
+        for d in debug_vars:
+            impl_lines.append(
+                f" *   {d['type']} {d['name']}: 作用范围=({d['decl_line']}, {d['scope_end_line']}], 跨越出让点={str(d['has_async_span']).capitalize()}"
+            )
         impl_lines.append(" */")
         impl_lines.append("")
 
@@ -1205,10 +1277,11 @@ def process(input_file, enable_line):
     print(f"Generated: {c_file}")
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: python coro_translater.py <input.c> [--line]")
-        sys.exit(1)
-
-    input_file = sys.argv[1]
-    enable_line = '--line' in sys.argv
-    process(input_file, enable_line)
+    import argparse
+    parser = argparse.ArgumentParser(description='Translate C _async coroutine functions into coroutine state-machine code.')
+    parser.add_argument('input', help='Input C source file')
+    parser.add_argument('--line', action='store_true', help='Emit #line directives for debug mapping')
+    parser.add_argument('--debug-scope', action='store_true', help='Print scope/lifetime debug JSON')
+    parser.add_argument('--debug-scope-json', metavar='PATH', help='Write debug scope JSON to a file')
+    args = parser.parse_args()
+    process(args.input, args.line, debug_scope=args.debug_scope, debug_path=args.debug_scope_json)

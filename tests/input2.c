@@ -7,6 +7,8 @@
  *      第三个 sensro_state_e state3 则用于测试翻译脚本是否偷懒只要是接收返回值就不提升，此处 state3 变量如果没有提升，则说明翻译脚本有问题
  *      第四个 int abc 则需要提升
  *      第五个 int abc2 作为 static 变量，不需要提升
+ * 3、是否能处理没有跨越出让点但依然要提升的变量：
+ *      int sensor_data3，没有跨越出让点，但是取了它的指针传给内层，出让后如果内层要读写指针，会因为它是栈上变量而出现错误。所以依然需要提升
  */
 
 _async void func2(void){
@@ -35,13 +37,17 @@ _async void func2(void){
     }
     printf("state3: %d\n", state3);
 
+    int sensor_data3 = 0;
+    int test_data = 0;
 
-    state3 = _await get_sensor_data(&my_sensor, &sensor_data);
-    if(state != 0){
+    state3 = _await get_sensor_data(&my_sensor, &sensor_data3);
+    
+    if(state3 != 0){
         printf("Get sensor Failed!\n");
     }else {
         printf("Get: %d\n", sensor_data);
     }
+    test_data ++;
 
     int abc = _await get_abc();
     printf("abc: %d\n", abc);

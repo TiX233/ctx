@@ -11,7 +11,11 @@
  *       (无)
  * 
  * 需要持久化的局部变量: 
- *           (无)
+ *           uint8_t flag_is_wait_topic_timeout
+ * 
+ * 局部变量作用域详情: 
+ *   异步关键字捕获行号: 11, 15, 18
+ *   uint8_t flag_is_wait_topic_timeout: 作用范围=(11, 20], 跨越出让点=True
  */
 
 // ======== 翻译后的函数体 ========
@@ -31,12 +35,11 @@ void _cocb_btn_check(struct coro_stu *co) {
 
 
         /* BEGIN: 检测到 _await 关键字，替换 */
-        _co_wait_topic(co, NULL, &topic_btn_click, -1);
         co->step = 1;
+        _co_wait_topic(co, NULL, &topic_btn_click, -1);
         return ; // 出让
 _colabel_1:
-        ;
-        uint8_t flag_is_wait_topic_timeout = ((struct _coval_wait_topic *)(co->son->prv_data))->_coretval_;
+        _prv_data->flag_is_wait_topic_timeout = ((struct _coval_wait_topic *)(co->son->prv_data))->_coretval_;
         // free 子协程对象
         ctx_mem_data_free(co->son->prv_data);
         ctx_mem_free(co->son);
@@ -44,12 +47,12 @@ _colabel_1:
         /* END: 检测到 _await 关键字，替换 */
 
        
-        if(flag_is_wait_topic_timeout){
+        if(_prv_data->flag_is_wait_topic_timeout){
 
 
             /* BEGIN: 检测到 _await 关键字，替换 */
-            _co_led_blink(co, NULL, 2, 100, 10);
             co->step = 2;
+            _co_led_blink(co, NULL, 2, 100, 10);
             return ; // 出让
 _colabel_2:
             /* 用户未接收返回值 */
@@ -63,8 +66,8 @@ _colabel_2:
 
 
             /* BEGIN: 检测到 _await 关键字，替换 */
-            _co_led_blink(co, NULL, 2, 150, 3);
             co->step = 3;
+            _co_led_blink(co, NULL, 2, 150, 3);
             return ; // 出让
 _colabel_3:
             /* 用户未接收返回值 */

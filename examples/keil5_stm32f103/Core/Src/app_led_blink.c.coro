@@ -14,6 +14,10 @@
  * 
  * 需要持久化的局部变量: 
  *           uint32_t i
+ * 
+ * 局部变量作用域详情: 
+ *   异步关键字捕获行号: 31, 33
+ *   uint32_t i: 作用范围=(29, 34], 跨越出让点=True
  */
 
 // ======== 翻译后的函数体 ========
@@ -31,8 +35,8 @@ void _cocb_led_blink(struct coro_stu *co) {
 
 
         /* BEGIN: 检测到 _await 关键字，替换 */
-        _co_delay_ticks(co, NULL, _prv_data->high_level_ticks);
         co->step = 1;
+        _co_delay_ticks(co, NULL, _prv_data->high_level_ticks);
         return ; // 出让
 _colabel_1:
         /* 用户未接收返回值 */
@@ -46,8 +50,8 @@ _colabel_1:
 
 
         /* BEGIN: 检测到 _await 关键字，替换 */
-        _co_delay_ticks(co, NULL, _prv_data->high_level_ticks);
         co->step = 2;
+        _co_delay_ticks(co, NULL, _prv_data->high_level_ticks);
         return ; // 出让
 _colabel_2:
         /* 用户未接收返回值 */

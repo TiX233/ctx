@@ -8,7 +8,7 @@ struct _coval_btn_check {
     // (无)
 
     // 需要持久化的局部变量
-    // (无)
+    uint8_t flag_is_wait_topic_timeout;
 
     // 返回值
     int _coretval_;

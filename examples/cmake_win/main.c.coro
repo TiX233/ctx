@@ -15,6 +15,10 @@
  * 
  * 需要持久化的局部变量: 
  *           (无)
+ * 
+ * 局部变量作用域详情: 
+ *   异步关键字捕获行号: 21
+ *   uint32_t events_get: 作用范围=(21, 26], 跨越出让点=False
  */
 
 // ======== 翻译后的函数体 ========
@@ -31,8 +35,8 @@ void _cocb_task_wait_events(struct coro_stu *co) {
 
 
     /* BEGIN: 检测到 _await 关键字，替换 */
-    _co_ctx_wait_events(co, NULL, &events_test, _prv_data->time_out, _prv_data->events_wait_for, _prv_data->and_or);
     co->step = 1;
+    _co_ctx_wait_events(co, NULL, &events_test, _prv_data->time_out, _prv_data->events_wait_for, _prv_data->and_or);
     return ; // 出让
 _colabel_1:
     ;
@@ -117,6 +121,9 @@ struct coro_stu* _co_task_wait_events(struct coro_stu *father, struct coro_stu *
  * 
  * 需要持久化的局部变量: 
  *           (无)
+ * 
+ * 局部变量作用域详情: 
+ *   异步关键字捕获行号: 33, 38
  */
 
 // ======== 翻译后的函数体 ========
@@ -131,8 +138,8 @@ void _cocb_task_events_publisher(struct coro_stu *co) {
 
 
     /* BEGIN: 检测到 _await 关键字，替换 */
-    _co_delay_ticks(co, NULL, 200);
     co->step = 1;
+    _co_delay_ticks(co, NULL, 200);
     return ; // 出让
 _colabel_1:
     /* 用户未接收返回值 */
@@ -147,8 +154,8 @@ _colabel_1:
 
 
     /* BEGIN: 检测到 _await 关键字，替换 */
-    _co_delay_ticks(co, NULL, 200);
     co->step = 2;
+    _co_delay_ticks(co, NULL, 200);
     return ; // 出让
 _colabel_2:
     /* 用户未接收返回值 */
