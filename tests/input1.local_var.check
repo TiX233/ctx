@@ -1,0 +1,15 @@
+func1:
+    # 所有局部变量，不包括 const、static、_var_frame、_var_local 标注的变量
+    all_local_var:
+        var_type a:
+            作用范围=(11, 17]
+            跨越出让点=True
+        int b:
+            作用范围=(19, 23]
+            跨越出让点=False
+        int i:
+            作用范围=(20, 22]
+            跨越出让点=False
+    # 需要提升的变量
+    frame_var:
+        var_type a

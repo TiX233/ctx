@@ -1,0 +1,35 @@
+func2:
+    # 所有局部变量，不包括 const、static、_var_frame、_var_local 标注的变量
+    all_local_var:
+        int sensor_data:
+            作用范围=(16, 48]
+            跨越出让点=True
+        sensro_state_e state:
+            作用范围=(18, 19]
+            跨越出让点=False
+        sensro_state_e state2:
+            作用范围=(25, 26]
+            跨越出让点=False
+        sensro_state_e state3:
+            作用范围=(32, 45]
+            跨越出让点=True
+        int i:
+            作用范围=(34, 37]
+            跨越出让点=True
+        int sensor_data3:
+            作用范围=(40, 43]
+            跨越出让点=True
+        int test_data:
+            作用范围=(41, 50]
+            跨越出让点=True
+        int abc:
+            作用范围=(52, 55]
+            跨越出让点=True
+    # 需要提升的变量
+    frame_var:
+        int sensor_data
+        sensro_state_e state3
+        int i
+        int sensor_data3
+        int test_data
+        int abc

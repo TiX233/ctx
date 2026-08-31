@@ -5,7 +5,24 @@
  *     所以翻译脚本会把它的生命周期提升到协程帧中，此时用户可以用 _var_local 关键字确保该变量不用提升生命周期，减小内存消耗
  */
 
-_async void btn_check(void){
+// 自动例程
+_async void btn_check1(void){
+
+    while(1){
+        // 以最大时限等待按键单击事件
+        uint8_t flag_is_wait_topic_timeout = _await wait_topic(&topic_btn_click, -1);
+       
+        if(flag_is_wait_topic_timeout){ // 如果等待按键单击事件超时
+            // 快速闪烁十次 led2，动态创建
+            _await led_blink(2, 100, 10);
+        }else { // 在时限内发生了按键单机时间
+            // 快速闪烁三次 led2，动态创建
+            _await led_blink(2, 150, 3);
+        }
+    }
+}
+// 手动例程
+_async void btn_check2(void){
 
     while(1){
         // 以最大时限等待按键单击事件

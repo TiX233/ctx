@@ -13,6 +13,7 @@ C 无栈协程 _async 源到源翻译器
 
 2026年 8月30日: V0.6, 转用 V2 版本翻译模板作为翻译规则
 2026年 8月31日: V0.7, 变更变量作用域判断方法，使用起止行号与异步关键字行号决定是否提升变量生命周期
+2026年 8月31日: V0.8, 增加 _var_frame/_var_local 关键字的识别，支持手动声明生命周期；增加局部变量翻译结果检查输出能力
 
 用法: python coro_translater.py <input.c> [--line]
 输出：
@@ -245,12 +246,21 @@ def try_parse_declaration(tokens, idx, end_idx, source):
             idx += 1
         return None, idx
 
+    force_frame = False
+    force_local = False
     type_tokens = []
     while idx <= end_idx:
         idx = skip_whitespace(tokens, idx, end_idx)
         if idx > end_idx:
             break
         ct = tokens[idx]
+        if ct[0] == 'identifier' and ct[1] in ('_var_frame', '_var_local'):
+            if ct[1] == '_var_frame':
+                force_frame = True
+            else:
+                force_local = True
+            idx += 1
+            continue
         if ct[0] == 'identifier' and ct[1] in ('const','volatile','restrict','inline','_Atomic'):
             type_tokens.append(ct)
             idx += 1
@@ -352,7 +362,9 @@ def try_parse_declaration(tokens, idx, end_idx, source):
             "name": cur_name,
             "decl_start": decl_start,
             "name_token_idx": cur_name_idx,
-            "init": init_expr
+            "init": init_expr,
+            "force_frame": force_frame,
+            "force_local": force_local,
         })
 
         if idx > end_idx:
@@ -389,6 +401,9 @@ class VarInfo:
         self.in_for_header = False
         self.addr_taken = False
         self.last_use_line = None
+        self.force_frame = False
+        self.force_local = False
+        self.value_param_await_line = None
 
 # ================================================
 # 递归作用域分析
@@ -452,6 +467,8 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
                     for v in vlist:
                         vi = VarInfo(v['type'], v['name'], v['decl_start'], v['decl_end'], v['decl_end'], v['name_token_idx'], v.get('init'))
                         vi.in_for_header = True
+                        vi.force_frame = bool(v.get('force_frame', False))
+                        vi.force_local = bool(v.get('force_local', False))
                         for_head_vars.append(vi)
                     idx = nxt
                 idx = skip_balanced(tokens, lpar, rbrace, '(', ')')
@@ -529,8 +546,8 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
         for j in range(stmt_start, min(stmt_end, rbrace)):
             if tokens[j][0] == 'identifier' and tokens[j][1] in ('_yield', '_await', '_await_static'):
                 yields.append(j)
-                if tokens[j][1] == '_await':
-                    m = re.search(r'(?:(?:[A-Za-z_][A-Za-z0-9_\s\*\[\]]*?)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*_await\s+', stmt_text)
+                if tokens[j][1] in ('_await', '_await_static'):
+                    m = re.search(r'(?:(?:[A-Za-z_][A-Za-z0-9_\s\*\[\]]*?)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*_await(?:_static)?\s*', stmt_text)
                     if m:
                         await_returns[m.group(1)] = j
 
@@ -541,6 +558,8 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
             for v in vlist:
                 vi = VarInfo(v['type'], v['name'], decl_start, decl_end, decl_end, v['name_token_idx'], v.get('init'))
                 vi.inside_loop = in_loop
+                vi.force_frame = bool(v.get('force_frame', False))
+                vi.force_local = bool(v.get('force_local', False))
                 if vi.init is not None and '_await' in vi.init:
                     await_returns[vi.name] = idx
                 variables = [v for v in variables if v.name != vi.name]
@@ -578,6 +597,31 @@ def analyze_scope(tokens, lbrace, rbrace, source, in_loop=False, parent_vars=Non
                         v.addr_taken = True
                         break
 
+    for v in variables:
+        if v.force_local:
+            continue
+        if v.name in await_returns:
+            continue
+        for idx in range(lbrace + 1, rbrace):
+            if tokens[idx][0] == 'identifier' and tokens[idx][1] in ('_await', '_await_static'):
+                stmt_start = idx
+                while stmt_start > lbrace and tokens[stmt_start - 1][1] not in (';', '{', '}'):
+                    stmt_start -= 1
+                stmt_end = idx
+                while stmt_end < rbrace and tokens[stmt_end][1] not in (';', '{', '}'):
+                    stmt_end += 1
+                stmt_text = source[tokens[stmt_start][2]: tokens[stmt_end][2]] if stmt_end <= rbrace and stmt_start <= stmt_end else ''
+                if '_await' not in stmt_text and '_await_static' not in stmt_text:
+                    continue
+                if re.search(r'\b' + re.escape(v.name) + r'\s*=\s*_await(?:_static)?\b', stmt_text):
+                    continue
+                if not re.search(r'(?<!&)\b' + re.escape(v.name) + r'\b', stmt_text):
+                    continue
+                if re.search(r'&\s*' + re.escape(v.name) + r'\b', stmt_text):
+                    continue
+                v.value_param_await_line = source.count('\n', 0, tokens[idx][2]) + 1
+                break
+
     return variables, yields, await_returns
 
 def get_scope_debug_records(variables, yields, await_returns, tokens, source):
@@ -586,9 +630,19 @@ def get_scope_debug_records(variables, yields, await_returns, tokens, source):
     for v in variables:
         decl_line = source[:tokens[v.decl_start][2]].count('\n') + 1 if v.decl_start < len(tokens) else 1
         decl_end_line = source[:tokens[v.decl_end][3]].count('\n') + 1 if v.decl_end < len(tokens) else decl_line
-        scope_end_line = source[:tokens[v.scope_end][3]].count('\n') + 1 if v.scope_end < len(tokens) else decl_end_line
+        if v.value_param_await_line is not None:
+            scope_end_line = v.value_param_await_line
+            end_bracket = ')'
+        else:
+            scope_end_line = source[:tokens[v.scope_end][3]].count('\n') + 1 if v.scope_end < len(tokens) else decl_end_line
+            end_bracket = ']'
         receiver_pos = await_returns.get(v.name)
-        has_async_span = any(decl_line < line <= scope_end_line for line in async_lines)
+        if v.force_local:
+            has_async_span = False
+        elif v.value_param_await_line is not None:
+            has_async_span = any(decl_line < line < v.value_param_await_line for line in async_lines)
+        else:
+            has_async_span = any(decl_line < line <= scope_end_line for line in async_lines)
         records.append({
             'name': v.name,
             'type': v.type,
@@ -598,6 +652,7 @@ def get_scope_debug_records(variables, yields, await_returns, tokens, source):
             'decl_line': decl_line,
             'decl_end_line': decl_end_line,
             'scope_end_line': scope_end_line,
+            'scope_end_bracket': end_bracket,
             'addr_taken': getattr(v, 'addr_taken', False),
             'inside_loop': v.inside_loop,
             'await_receiver_at': receiver_pos,
@@ -605,6 +660,8 @@ def get_scope_debug_records(variables, yields, await_returns, tokens, source):
             'async_keyword_lines': async_lines,
             'has_async_span': has_async_span,
             'same_statement_await': receiver_pos is not None and receiver_pos <= v.decl_end,
+            'force_frame': bool(getattr(v, 'force_frame', False)),
+            'force_local': bool(getattr(v, 'force_local', False)),
         })
     return records
 
@@ -618,13 +675,22 @@ def determine_promoted(variables, yields, await_returns=None, tokens=None, sourc
     promoted = {}
 
     for v in variables:
+        if v.force_frame:
+            promoted[v.name] = v
+            continue
+        if v.force_local:
+            continue
         if getattr(v, 'addr_taken', False):
             promoted[v.name] = v
             continue
 
         decl_line = source[:tokens[v.decl_start][2]].count('\n') + 1 if v.decl_start < len(tokens) else 1
-        scope_end_line = source[:tokens[v.scope_end][3]].count('\n') + 1 if v.scope_end < len(tokens) else decl_line
-        has_async_span = any(decl_line < line <= scope_end_line for line in async_lines)
+        if v.value_param_await_line is not None:
+            scope_end_line = v.value_param_await_line
+            has_async_span = any(decl_line < line < v.value_param_await_line for line in async_lines)
+        else:
+            scope_end_line = source[:tokens[v.scope_end][3]].count('\n') + 1 if v.scope_end < len(tokens) else decl_line
+            has_async_span = any(decl_line < line <= scope_end_line for line in async_lines)
         if has_async_span:
             promoted[v.name] = v
 
@@ -1071,7 +1137,51 @@ def generate_output(input_file, enable_line):
     # 调整：直接使用上面提取的 funcs 和 tokens（但 tokens 是局部变量，需在函数内传递）
     # 我们把整体逻辑写在一个主函数中。
 
-def process(input_file, enable_line, debug_scope=False, debug_path=None):
+def build_scope_debug_payload(source, funcs, tokens):
+    debug_records = []
+    for fn in funcs:
+        variables, yields, await_returns = analyze_scope(tokens, fn['lbrace'], fn['rbrace'], source, in_loop=False)
+        debug_records.append({
+            'func': fn['name'],
+            'start_line': source[:tokens[fn['lbrace']][2]].count('\n') + 1,
+            'end_line': source[:tokens[fn['rbrace']][3]].count('\n') + 1,
+            'variables': get_scope_debug_records(variables, yields, await_returns, tokens, source),
+        })
+    return {'functions': debug_records}
+
+
+def render_scope_debug_text(payload):
+    lines = []
+    for fn in payload.get('functions', []):
+        lines.append(f"{fn['func']}:")
+        lines.append("    # 所有局部变量，不包括 const、static、_var_frame、_var_local 标注的变量")
+        lines.append("    all_local_var:")
+        all_vars = []
+        for v in fn.get('variables', []):
+            if v.get('force_local') or v.get('force_frame'):
+                continue
+            all_vars.append(v)
+        for v in all_vars:
+            lines.append(f"        {v['type']} {v['name']}:")
+            lines.append(f"            作用范围=({v['decl_line']}, {v['scope_end_line']}{v.get('scope_end_bracket', ']')}")
+            lines.append(f"            跨越出让点={str(v['has_async_span']).capitalize()}")
+        lines.append("    # 需要提升的变量")
+        lines.append("    frame_var:")
+        frame_vars = []
+        for v in fn.get('variables', []):
+            if v.get('force_frame') or v.get('has_async_span'):
+                if not v.get('force_local'):
+                    frame_vars.append(f"{v['type']} {v['name']}")
+        if not frame_vars:
+            lines.append("        (无)")
+        else:
+            for entry in frame_vars:
+                lines.append(f"        {entry}")
+        lines.append("")
+    return '\n'.join(lines).rstrip() + '\n'
+
+
+def process(input_file, enable_line, debug_scope=False, debug_path=None, debug_scope_text=None):
     with open(input_file, 'r', encoding='utf-8') as f:
         source = f.read()
     funcs, tokens = extract_async_functions(source)
@@ -1080,23 +1190,23 @@ def process(input_file, enable_line, debug_scope=False, debug_path=None):
         # print("No _async functions detected. No files generated.")
         return
 
-    if debug_scope:
-        debug_records = []
-        for fn in funcs:
-            variables, yields, await_returns = analyze_scope(tokens, fn['lbrace'], fn['rbrace'], source, in_loop=False)
-            debug_records.append({
-                'func': fn['name'],
-                'start_line': source[:tokens[fn['lbrace']][2]].count('\n') + 1,
-                'end_line': source[:tokens[fn['rbrace']][3]].count('\n') + 1,
-                'variables': get_scope_debug_records(variables, yields, await_returns, tokens, source),
-            })
-        payload = {'functions': debug_records}
+    payload = build_scope_debug_payload(source, funcs, tokens)
+    if debug_scope or debug_path:
         if debug_path:
             with open(debug_path, 'w', encoding='utf-8') as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             print(f"Scope debug JSON written to: {debug_path}")
         else:
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            sys.stdout.buffer.write((json.dumps(payload, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+
+    if debug_scope_text is not None:
+        text_out = render_scope_debug_text(payload)
+        if debug_scope_text == '-':
+            sys.stdout.buffer.write(text_out.encode('utf-8'))
+        else:
+            with open(debug_scope_text, 'w', encoding='utf-8') as f:
+                f.write(text_out)
+            print(f"Scope debug text written to: {debug_scope_text}")
 
     base = os.path.splitext(input_file)[0]
     h_file = base + '.c.coro.h'
@@ -1189,8 +1299,9 @@ def process(input_file, enable_line, debug_scope=False, debug_path=None):
         impl_lines.append(f" *   异步关键字捕获行号: {', '.join(map(str, async_lines))}")
         debug_vars = get_scope_debug_records(variables, yields, await_returns, tokens, source)
         for d in debug_vars:
+            end_symbol = d.get('scope_end_bracket', ']')
             impl_lines.append(
-                f" *   {d['type']} {d['name']}: 作用范围=({d['decl_line']}, {d['scope_end_line']}], 跨越出让点={str(d['has_async_span']).capitalize()}"
+                f" *   {d['type']} {d['name']}: 作用范围=({d['decl_line']}, {d['scope_end_line']}{end_symbol}, 跨越出让点={str(d['has_async_span']).capitalize()}"
             )
         impl_lines.append(" */")
         impl_lines.append("")
@@ -1283,5 +1394,6 @@ if __name__ == '__main__':
     parser.add_argument('--line', action='store_true', help='Emit #line directives for debug mapping')
     parser.add_argument('--debug-scope', action='store_true', help='Print scope/lifetime debug JSON')
     parser.add_argument('--debug-scope-json', metavar='PATH', help='Write debug scope JSON to a file')
+    parser.add_argument('--debug-scope-text', nargs='?', const='-', metavar='PATH', help='Print the human-readable local-variable lifetime report. If PATH is provided, write it to that file instead of stdout.')
     args = parser.parse_args()
-    process(args.input, args.line, debug_scope=args.debug_scope, debug_path=args.debug_scope_json)
+    process(args.input, args.line, debug_scope=args.debug_scope, debug_path=args.debug_scope_json, debug_scope_text=args.debug_scope_text)

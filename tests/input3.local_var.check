@@ -1,0 +1,25 @@
+btn_check1:
+    # 所有局部变量，不包括 const、static、_var_frame、_var_local 标注的变量
+    all_local_var:
+        uint8_t flag_is_wait_topic_timeout:
+            作用范围=(13, 22]
+            跨越出让点=True
+    # 需要提升的变量
+    frame_var:
+        uint8_t flag_is_wait_topic_timeout
+
+btn_check2:
+    # 所有局部变量，不包括 const、static、_var_frame、_var_local 标注的变量
+    all_local_var:
+    # 需要提升的变量
+    frame_var:
+
+fun_here:
+    # 所有局部变量，不包括 const、static、_var_frame、_var_local 标注的变量
+    all_local_var:
+        int sensor_config:
+            作用范围=(53, 54)
+            跨越出让点=False
+    # 需要提升的变量
+    frame_var:
+        int i
