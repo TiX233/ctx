@@ -15,6 +15,8 @@ C 无栈协程 _async 源到源翻译器
 2026年 8月31日: V0.7, 变更变量作用域判断方法，使用起止行号与异步关键字行号决定是否提升变量生命周期
 2026年 8月31日: V0.8, 增加 _var_frame/_var_local 关键字的识别，支持手动声明生命周期；增加局部变量翻译结果检查输出能力
 
+2026年 9月06日: V0.9, 更新 V2.1 版本翻译模板新增规则，增加 __ctx_customize_xxx 宏开关的创建
+
 用法: python coro_translater.py <input.c> [--line]
 输出：
   - <input.c>.coro.h   （结构体定义）
@@ -954,7 +956,7 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             out.append("\n" + orig_indent + "/* BEGIN: 检测到 _yield 关键字，替换 */\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + "ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒\n")
-            out.append(orig_indent + "return ; // 出让\n")
+            out.append(orig_indent + "return 0; // 出让\n")
             out.append(f"{label_prefix}{step}:\n")
             out.append(orig_indent + "/* END: 检测到 _yield 关键字，替换 */\n")
             if enable_line:
@@ -973,9 +975,10 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             out.append("\n\n" + orig_indent + "/* BEGIN: 检测到 _await 关键字，替换 */\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + call_str + ";\n")
-            out.append(orig_indent + "return ; // 出让\n")
+            out.append(orig_indent + "return 0; // 出让\n")
             out.append(f"{label_prefix}{step}:\n")
             if recv_var:
+                out.append(orig_indent + f"#ifndef __ctx_customize_retval_{func}\n")
                 if recv_var in promoted_names:
                     out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
                 elif decl_prefix:
@@ -983,11 +986,22 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
                     out.append(orig_indent + f"{decl_prefix} {recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
                 else:
                     out.append(orig_indent + f"{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
+                out.append(orig_indent + "#else\n")
+                if recv_var in promoted_names:
+                    out.append(orig_indent + f"_prv_data->{recv_var} = __ctx_customize_retval_{func}(co);\n")
+                elif decl_prefix:
+                    out.append(orig_indent + ";\n")
+                    out.append(orig_indent + f"{decl_prefix} {recv_var} = __ctx_customize_retval_{func}(co);\n")
+                else:
+                    out.append(orig_indent + f"{recv_var} = __ctx_customize_retval_{func}(co);\n")
+                out.append(orig_indent + "#endif\n")
             else:
                 out.append(orig_indent + "/* 用户未接收返回值 */\n")
+            out.append(orig_indent + f"#ifndef __ctx_customize_no_free_{func}\n")
             out.append(orig_indent + "// free 子协程对象\n")
             out.append(orig_indent + "ctx_mem_data_free(co->son->prv_data);\n")
             out.append(orig_indent + "ctx_mem_free(co->son);\n")
+            out.append(orig_indent + "#endif\n")
             out.append(orig_indent + "co->son = NULL;\n")
             out.append(orig_indent + "/* END: 检测到 _await 关键字，替换 */\n")
             if enable_line:
@@ -1007,9 +1021,10 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
             out.append("\n\n" + orig_indent + "/* BEGIN: 检测到 _await_static 关键字，替换 */\n")
             out.append(orig_indent + f"co->step = {step};\n")
             out.append(orig_indent + f"_co_{func}(co, {call_args});\n")
-            out.append(orig_indent + "return ; // 出让\n")
+            out.append(orig_indent + "return 0; // 出让\n")
             out.append(f"{label_prefix}{step}:\n")
             if recv_var:
+                out.append(orig_indent + f"#ifndef __ctx_customize_retval_{func}\n")
                 if recv_var in promoted_names:
                     out.append(orig_indent + f"_prv_data->{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
                 elif decl_prefix:
@@ -1017,6 +1032,15 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
                     out.append(orig_indent + f"{decl_prefix} {recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
                 else:
                     out.append(orig_indent + f"{recv_var} = ((struct _coval_{func} *)(co->son->prv_data))->_coretval_;\n")
+                out.append(orig_indent + "#else\n")
+                if recv_var in promoted_names:
+                    out.append(orig_indent + f"_prv_data->{recv_var} = __ctx_customize_retval_{func}(co);\n")
+                elif decl_prefix:
+                    out.append(orig_indent + ";\n")
+                    out.append(orig_indent + f"{decl_prefix} {recv_var} = __ctx_customize_retval_{func}(co);\n")
+                else:
+                    out.append(orig_indent + f"{recv_var} = __ctx_customize_retval_{func}(co);\n")
+                out.append(orig_indent + "#endif\n")
             else:
                 out.append(orig_indent + "/* 用户未接收返回值 */\n")
             out.append(orig_indent + "co->son = NULL;\n")
@@ -1048,9 +1072,11 @@ def apply_state_machine(hoisted_body, fname, ret_type, param_names,
         out.append(indent + "if(co->father == NULL){ // 没有父协程则自己 free 自己\n")
         out.append(indent + indent + "ctx_mem_data_free(co->prv_data);\n")
         out.append(indent + indent + "ctx_mem_free(co);\n")
+        out.append(indent + indent + "return 1;\n")
         out.append(indent + "}else {\n")
         out.append(indent + indent + "// 唤醒父协程\n")
         out.append(indent + indent + "ctx_coro_wake(co->father, 0); // 0 代表 0 tick 后唤醒\n")
+        out.append(indent + indent + "return 0;\n")
         out.append(indent + "}\n")
     else:
         out.append(indent + "if(father == NULL){ // 没有父协程则自己 free 自己\n")
@@ -1318,7 +1344,7 @@ def process(input_file, enable_line, debug_scope=False, debug_path=None, debug_s
             body_start_line, enable_line, src_basename,
             promoted_names, callback_mode=True
         )
-        impl_lines.append(f"void _cocb_{fn['name']}(struct coro_stu *co) {{")
+        impl_lines.append(f"uint8_t _cocb_{fn['name']}(struct coro_stu *co) {{")
         impl_lines.extend(callback_body.splitlines())
         impl_lines.append("}")
         impl_lines.append("")
@@ -1359,6 +1385,7 @@ def process(input_file, enable_line, debug_scope=False, debug_path=None, debug_s
         impl_lines.append("")
         impl_lines.append("    // 运行/启动该任务")
         impl_lines.append("    co->step = 0;")
+        impl_lines.append("    co->something = 0;")
         impl_lines.append("    if(father != NULL){")
         impl_lines.append("        father->son = co;")
         impl_lines.append("        // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数")

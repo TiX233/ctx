@@ -2,7 +2,7 @@
  * @file ctx.h
  * @author realTiX
  * @brief c 无栈协程管理器，需要搭配 coro_translater.py 做源到源翻译使用，目前暂时与 ltx 调度器紧耦合
- * @version 0.7
+ * @version 0.8
  * @date 2026-06-28 (0.1, 初步完成设计)
  *       2026-06-29 (0.2, 补充内存分配的判断；修复 delay 用错对象的 bug)
  *       2026-06-30 (0.3, 启动调度器管理的协程可以动态创建了；增加对整条异步任务链的启停管理)
@@ -10,6 +10,8 @@
  *       2026-07-30 (0.5, 闹钟回调增加超时返回值置零操作，提高拓展性)
  *       2026-08-14 (0.6, 增加内存耗尽钩子函数)
  *       2026-08-31 (0.7, 增加手动声明变量生命周期的关键字)
+ * 
+ *       2026-09-05 (0.8, 增加 __ctx_customize 宏拉满内置组件性能，且用于适配 ltx V4 多核。一定要使用 V0.9 及以上版本的翻译脚本！)
  * 
  * @copyright Copyright (c) 2026, realTiX
  * @license Apache-2.0
@@ -52,10 +54,10 @@
 // 协程对象
 // 也许应该叫协程控制块（CCB 说是
 struct coro_stu {
-    // uint8_t flag_is_ready;
     uint32_t step;
+    uintptr_t something;                                    // 总之就是提高拓展性用的
 
-    void (*callback)(struct coro_stu *co);                  // 自定义回调
+    uint8_t (*callback)(struct coro_stu *co);               // 自定义回调
 
     struct ltx_Topic_stu *topic_wait_for;                   // 某一步骤所等待事件的话题指针
     struct ltx_Topic_subscriber_stu subscriber_topic;       // 管理协程等待事件的订阅者
@@ -71,7 +73,7 @@ struct coro_stu {
 struct _coval_wait_topic {uint8_t _coretval_;};
 
 // 初始化协程
-void ctx_coro_init(struct coro_stu *co, void (*callback)(struct coro_stu *co));
+void ctx_coro_init(struct coro_stu *co, uint8_t (*callback)(struct coro_stu *co));
 // 直接恢复 某协程 的执行，不关心父子关系，不建议用户调用
 // ticks 传入 0 则代表尽快唤醒
 void ctx_coro_wake(struct coro_stu *co, TickType_t ticks);
@@ -83,11 +85,15 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks);
 // 预设的 delay 函数实现
 void delay_ticks(TickType_t ticks);                                         // *可以使用 _awiat/_await_static 调用
 void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ticks);
+#define __ctx_customize_no_free_delay_ticks
 
 // 预设的等待事件话题实现，可设置超时时间，timeout 如果为 0 则以最大计时时间进行等待
 // 返回 1 代表等待事件超时
 uint8_t wait_topic(struct ltx_Topic_stu *topic, TickType_t time_out);       // *可以使用 _awiat/_await_static 调用
 void _co_wait_topic(struct coro_stu *father, struct coro_stu *co, struct ltx_Topic_stu *topic, TickType_t time_out);
+// #define __ctx_customize_retval_wait_topic(co)   (co->topic_wait_for == NULL ? 1 : 0);co->topic_wait_for = NULL
+#define __ctx_customize_retval_wait_topic(co)   (co->something ? 1 : 0); co->something = 0
+#define __ctx_customize_no_free_wait_topic
 
 
 // 内存相关函数都是弱定义，用户可替换为自己的实现。如果程序中全程没有使用到 _await 而是只使用 _await_static，那么可以不需要以下内容
@@ -102,6 +108,11 @@ void ctx_mem_free(void *ptr);
 void ctx_mem_data_free(void *ptr);
 
 // 内存耗尽会调用此函数，用户可在这里处理异常
-void ctx_mem_run_out(void);
+void* ctx_mem_run_out(uint32_t size);
+
+
+// 其它
+uint8_t _co_alarm_cb(void *param);
+uint8_t _co_subscriber_cb(void *param);
 
 #endif // __CTX_H__

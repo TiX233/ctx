@@ -363,7 +363,7 @@ void ltx_Sys_scheduler(uint8_t core_id){ // 似乎甚至可以调度器里面跑
             }
 
             // 回调执行完成后，占有标志位清零
-            if(!callback_retval){ // 用户没有释放 topic 的内存才能操作这个标志位，否则会访问野指针
+            if(callback_retval != 1){ // 用户没有释放 topic 的内存才能操作这个标志位，否则会访问野指针
                 pTopic_real_head->state &= (~0x02);
             }
 

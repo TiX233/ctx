@@ -1,8 +1,8 @@
 #include "ctx.h"
 
-// 占位用
-struct _coval_wait_topic __wait_topic_prv_data__;
-struct coro_stu __son_placeholder__ = {.prv_data = &__wait_topic_prv_data__};
+// 占位用，V0.8 版本开始不再需要
+// struct _coval_wait_topic __wait_topic_prv_data__;
+// struct coro_stu __son_placeholder__ = {.prv_data = &__wait_topic_prv_data__};
 
 // 如果被非 async 函数调用，那么会退化为阻塞延时
 // 如果有 rtos 那可以自行把这个替换为对应的非阻塞延时
@@ -29,9 +29,6 @@ void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ti
         delay_ticks(ticks);
         return ;
     }
-    // 这个函数并不是真正的 async 函数，只是对设置闹钟的一层封装
-    // 为了避免内存管理出现问题，所以这里将它的子节点设置为占位符
-    father->son = &__son_placeholder__;
 
     if(!ticks){ // 要求尽快执行
         ltx_Topic_publish(&(father->alarm_next_run.topic));
@@ -55,48 +52,60 @@ void _co_wait_topic(struct coro_stu *father, struct coro_stu *co, struct ltx_Top
     ltx_Topic_subscribe(topic, &(father->subscriber_topic));
 
     ltx_Alarm_add(&(father->alarm_next_run), time_out);
-    
-    // 这个函数并不是真正的 async 函数，只是对设置订阅与超时的一层封装
-    // 为了避免内存管理出现问题，所以这里将它的子节点设置为占位符
-    father->son = &__son_placeholder__;
 }
 
 
 
+#if (ltx_cfg_CORE_NUM > 1)
+#ifndef ltx_cfg_USE_CTX
+    #error "请开启ltx对ctx的多核特殊适配钩子"
+#endif
 // 协程闹钟通用回调
-void _co_alarm_cb(void *param){
+uint8_t _co_alarm_cb(void *param){
+    struct coro_stu *pCo = container_of(param, struct coro_stu, subscriber_alarm);
+
+    // 调用回调
+    return pCo->callback(pCo);
+}
+
+// 协程订阅话题通用回调
+uint8_t _co_subscriber_cb(void *param){
+    struct coro_stu *pCo = container_of(param, struct coro_stu, subscriber_topic);
+
+    // 调用回调
+    return pCo->callback(pCo);
+}
+#else
+// 协程闹钟通用回调
+uint8_t _co_alarm_cb(void *param){
     struct coro_stu *pCo = container_of(param, struct coro_stu, subscriber_alarm);
 
     if(pCo->topic_wait_for != NULL){ // 等待事件超时
         // 取消订阅该事件
-        ltx_Topic_unsubscribe(pCo->topic_wait_for, &(pCo->subscriber_topic));
+        ltx_Topic_unsubscribe(&(pCo->subscriber_topic));
         pCo->topic_wait_for = NULL;
-        __wait_topic_prv_data__._coretval_ = 1;
-    }else {
-        __wait_topic_prv_data__._coretval_ = 0;
+        pCo->something |= 0x80000000;
     }
     // 调用回调
-    pCo->callback(pCo);
+    return pCo->callback(pCo);
 }
 
 // 协程订阅话题通用回调
-void _co_subscriber_cb(void *param){
+uint8_t _co_subscriber_cb(void *param){
     struct coro_stu *pCo = container_of(param, struct coro_stu, subscriber_topic);
     // 关闭超时闹钟
     ltx_Alarm_remove(&(pCo->alarm_next_run));
     // 取消订阅该事件
-    ltx_Topic_unsubscribe(pCo->topic_wait_for, &(pCo->subscriber_topic));
-    pCo->topic_wait_for = NULL;
-    __wait_topic_prv_data__._coretval_ = 0;
+    ltx_Topic_unsubscribe(&(pCo->subscriber_topic));
 
     // 调用回调
-    pCo->callback(pCo);
+    return pCo->callback(pCo);
 }
-
+#endif
 
 
 // 初始化协程
-void ctx_coro_init(struct coro_stu *co, void (*callback)(struct coro_stu *co)){
+void ctx_coro_init(struct coro_stu *co, uint8_t (*callback)(struct coro_stu *co)){
     
     // if(co == NULL || callback == NULL){
     //     return -1;
@@ -115,11 +124,10 @@ void ctx_coro_init(struct coro_stu *co, void (*callback)(struct coro_stu *co)){
     co->alarm_next_run.next = NULL;
     // co->alarm_next_run.diff_tick = delay_ticks;
 
-    co->alarm_next_run.topic.flag_is_pending = 0;
+    co->alarm_next_run.topic.state = 0;
     co->alarm_next_run.topic.next = NULL;
     co->alarm_next_run.topic.subscriber_head.prev = NULL;
     co->alarm_next_run.topic.subscriber_head.next = &(co->subscriber_alarm);
-    co->alarm_next_run.topic.subscriber_tail = &(co->subscriber_alarm);
 
     co->subscriber_alarm.prev = &(co->alarm_next_run.topic.subscriber_head);
     co->subscriber_alarm.next = NULL;
@@ -148,15 +156,17 @@ void ctx_coro_wake(struct coro_stu *co, TickType_t ticks){
     }
 }
 
+
+#if (ltx_cfg_CORE_NUM == 1)
 // 暂停 某协程任务 的执行，会遍历整条调用链，暂停最终的子协程
 void ctx_coro_pause(struct coro_stu *co){
-    while(co->son != NULL && co->son != &__son_placeholder__){
+    while(co->son != NULL){
         co = co->son;
     }
     ltx_Alarm_remove(&(co->alarm_next_run));
     
     if(co->topic_wait_for != NULL){
-        ltx_Topic_unsubscribe(co->topic_wait_for, &(co->subscriber_topic));
+        ltx_Topic_unsubscribe(&(co->subscriber_topic));
     }
 }
 
@@ -166,7 +176,7 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
     if(co == NULL){
         return ;
     }
-    while(co->son != NULL && co->son != &__son_placeholder__){
+    while(co->son != NULL){
         co = co->son;
     }
     
@@ -180,7 +190,42 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
         ltx_Topic_subscribe(co->topic_wait_for, &(co->subscriber_topic));
     }
 }
+#else
+// todo
+// #error "这里还没适配多核"
+// 暂停 某协程任务 的执行，会遍历整条调用链，暂停最终的子协程
+void ctx_coro_pause(struct coro_stu *co){
+    while(co->son != NULL){
+        co = co->son;
+    }
+    ltx_Alarm_remove(&(co->alarm_next_run));
+    
+    if(co->topic_wait_for != NULL){
+        ltx_Topic_unsubscribe(&(co->subscriber_topic));
+    }
+}
 
+// 恢复 某协程任务 的执行，会遍历整条调用链，唤醒最终的子协程
+// ticks 传入 0 则代表尽快唤醒
+void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
+    if(co == NULL){
+        return ;
+    }
+    while(co->son != NULL){
+        co = co->son;
+    }
+    
+    if(!ticks){ // 要求尽快执行
+        ltx_Topic_publish(&(co->alarm_next_run.topic));
+        return ;
+    }
+
+    ltx_Alarm_add(&(co->alarm_next_run), ticks);
+    if(co->topic_wait_for != NULL){
+        ltx_Topic_subscribe(co->topic_wait_for, &(co->subscriber_topic));
+    }
+}
+#endif
 
 
 // 协程对象池
@@ -238,7 +283,7 @@ void ctx_mem_pool_init(void){
 ltx_weak
 void* ctx_mem_alloc(uint32_t size){
 
-    _LTX_IRQ_DISABLE();
+    _LTX_CRITICAL_INTO();
 
     void *block = __co_obj_pool_ctrl.free_list;
     if (block != NULL) {
@@ -246,11 +291,11 @@ void* ctx_mem_alloc(uint32_t size){
         __co_obj_pool_ctrl.free_list = CO_POOL_NEXT_PTR(block);
     }
 
-    _LTX_IRQ_ENABLE();
+    _LTX_CRITICAL_OUTO();
 
     if(block == NULL){
-        // 内存不足
-        ctx_mem_run_out();
+        // 内存不足，让用户尝试从其它地方分配内存
+        return ctx_mem_run_out(size);
     }
     return block;
 }
@@ -260,11 +305,10 @@ ltx_weak
 void* ctx_mem_data_alloc(uint32_t size){
     if(size > __co_prvdata_pool_ctrl.block_size){
         // 内存池单个对象尺寸不够导致的无法分配内存
-        ctx_mem_run_out();
-        return NULL;
+        return ctx_mem_run_out(size);
     }
 
-    _LTX_IRQ_DISABLE();
+    _LTX_CRITICAL_INTO();
 
     void *block = __co_prvdata_pool_ctrl.free_list;
     if (block != NULL) {
@@ -272,10 +316,10 @@ void* ctx_mem_data_alloc(uint32_t size){
         __co_prvdata_pool_ctrl.free_list = CO_POOL_NEXT_PTR(block);
     }
 
-    _LTX_IRQ_ENABLE();
+    _LTX_CRITICAL_OUTO();
     if(block == NULL){
         // 内存池空闲对象耗尽导致的内存不足
-        ctx_mem_run_out();
+        return ctx_mem_run_out(size);
     }
     return block;
 }
@@ -288,13 +332,13 @@ void ctx_mem_free(void *ptr){
         return ;
     }
 
-    _LTX_IRQ_DISABLE();
+    _LTX_CRITICAL_INTO();
 
     // 头插法，把归还的块插到 free_list 头部
     CO_POOL_NEXT_PTR(ptr) = __co_obj_pool_ctrl.free_list;
     __co_obj_pool_ctrl.free_list = ptr;
 
-    _LTX_IRQ_ENABLE();
+    _LTX_CRITICAL_OUTO();
 }
 
 ltx_weak
@@ -305,19 +349,23 @@ void ctx_mem_data_free(void *ptr){
         return ;
     }
 
-    _LTX_IRQ_DISABLE();
+    _LTX_CRITICAL_INTO();
 
     // 头插法，把归还的块插到 free_list 头部
     CO_POOL_NEXT_PTR(ptr) = __co_prvdata_pool_ctrl.free_list;
     __co_prvdata_pool_ctrl.free_list = ptr;
 
-    _LTX_IRQ_ENABLE();
+    _LTX_CRITICAL_OUTO();
 }
 
-// 内存不足无法分配时会调用此函数
+// 内存不足无法分配时会调用此函数，用户可在此处报错或者释放其它内存或者从其它地方分配内存
 ltx_weak 
-void ctx_mem_run_out(void){
+void* ctx_mem_run_out(uint32_t size){
+
+
     while(1){
 
     }
+
+    return NULL;
 }
