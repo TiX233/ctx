@@ -21,6 +21,10 @@ uint8_t wait_topic(struct ltx_Topic_stu *topic, TickType_t time_out){
     return 1;
 }
 
+#if (ltx_cfg_CORE_NUM > 1)
+extern struct ltx_Topic_stu *ltx_sys_topic_queue_tail;
+extern struct ltx_Alarm_stu ltx_sys_alarm_list;
+#endif
 
 // async 函数调用 delay_ticks 的话会被翻译脚本替换为调用这个
 void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ticks){
@@ -30,12 +34,84 @@ void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ti
         return ;
     }
 
+#if (ltx_cfg_CORE_NUM > 1)
+    // 多核下可能会有某个核暂停另一个核的任务
+    // 为了不出现暂停后又被后续代码激活的情况，此处判断标志位进一步保证真正暂停
+    _LTX_CRITICAL_INTO();
+    if(father->flag_is_paused){ // 被暂停
+        father->flag_is_paused = 0;
+
+        _LTX_CRITICAL_OUTO();
+        return ;
+    }else {
+        if(!ticks){ // 要求尽快执行
+            // ltx_Topic_publish(&(father->alarm_next_run.topic));
+                // 就绪标志位置 1
+                father->alarm_next_run.topic.state |= 0x01;
+                // 已经存在，不推入事件队列
+                if(father->alarm_next_run.topic.next != NULL || ltx_sys_topic_queue_tail == &father->alarm_next_run.topic){
+                    _LTX_CRITICAL_OUTO();
+                    return ;
+                }
+
+                ltx_sys_topic_queue_tail->next = &father->alarm_next_run.topic;
+                ltx_sys_topic_queue_tail = &father->alarm_next_run.topic;
+
+                _LTX_CRITICAL_OUTO();
+
+                _LTX_SET_SCHEDULE_FLAG();
+            return ;
+        }
+        // 将协程的闹钟设置在一段时间后
+        // ltx_Alarm_add(&(father->alarm_next_run), ticks);
+            struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
+            TickType_t tick_add = 0;
+
+            // 为 0 则以最大值倒计时
+            ticks = (ticks == 0) ? -1 : ticks;
+
+            if(father->alarm_next_run.prev != NULL){
+                father->alarm_next_run.prev->next = father->alarm_next_run.next;
+                if(father->alarm_next_run.next != NULL){
+                    father->alarm_next_run.next->prev = father->alarm_next_run.prev;
+                    father->alarm_next_run.next->diff_tick += father->alarm_next_run.diff_tick; // 应该不会溢出
+                    father->alarm_next_run.next = NULL;
+                }
+                father->alarm_next_run.prev = NULL;
+            }
+
+            while(pAlarm->next != NULL){
+                if((pAlarm->next->diff_tick + tick_add) > ticks){
+                    father->alarm_next_run.diff_tick = ticks - tick_add;
+                    pAlarm->next->diff_tick -= father->alarm_next_run.diff_tick;
+
+                    father->alarm_next_run.prev = pAlarm;
+                    father->alarm_next_run.next = pAlarm->next;
+                    pAlarm->next = &father->alarm_next_run;
+                    father->alarm_next_run.next->prev = &father->alarm_next_run;
+
+                    _LTX_CRITICAL_OUTO();
+                    return ;
+                }
+                tick_add += pAlarm->next->diff_tick;
+
+                pAlarm = pAlarm->next;
+            }
+
+            father->alarm_next_run.diff_tick = ticks - tick_add;
+            father->alarm_next_run.prev = pAlarm;
+            pAlarm->next = &father->alarm_next_run;
+
+            _LTX_CRITICAL_OUTO();
+    }
+#else
     if(!ticks){ // 要求尽快执行
         ltx_Topic_publish(&(father->alarm_next_run.topic));
         return ;
     }
     // 将协程的闹钟设置在一段时间后
     ltx_Alarm_add(&(father->alarm_next_run), ticks);
+#endif
 }
 
 // async 函数调用 wait_topic 的话会被翻译脚本替换为调用这个
@@ -48,10 +124,81 @@ void _co_wait_topic(struct coro_stu *father, struct coro_stu *co, struct ltx_Top
 
     // if(time_out == 0) time_out = -1;
 
-    father->topic_wait_for = topic;
-    ltx_Topic_subscribe(topic, &(father->subscriber_topic));
+    #if (ltx_cfg_CORE_NUM > 1)
+        father->topic_wait_for = topic;
+        // 多核下可能会有某个核暂停另一个核的任务
+        // 为了不出现暂停后又被后续代码激活的情况，此处判断标志位进一步保证真正暂停
+        _LTX_CRITICAL_INTO();
+        if(father->flag_is_paused){
+            father->flag_is_paused = 0;
 
-    ltx_Alarm_add(&(father->alarm_next_run), time_out);
+            _LTX_CRITICAL_OUTO();
+            return ;
+        }else {
+            // ltx_Topic_subscribe(topic, &(father->subscriber_topic));
+                if(father->subscriber_topic.prev != NULL){ // 已经订阅了某个话题，先取消订阅
+                    father->subscriber_topic.prev->next = father->subscriber_topic.next;
+                    if(father->subscriber_topic.next != NULL){
+                        father->subscriber_topic.next->prev = father->subscriber_topic.prev;
+                        // father->subscriber_topic.next = NULL;
+                    }
+                    // father->subscriber_topic.prev = NULL;
+                }
+
+                father->subscriber_topic.next = topic->subscriber_head.next;
+                father->subscriber_topic.prev = &topic->subscriber_head;
+                if(topic->subscriber_head.next != NULL){
+                    topic->subscriber_head.next->prev = &father->subscriber_topic;
+                }
+                topic->subscriber_head.next = &father->subscriber_topic;
+
+            // ltx_Alarm_add(&(father->alarm_next_run), time_out);
+                struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
+                TickType_t tick_add = 0;
+
+                // 为 0 则以最大值倒计时
+                time_out = (time_out == 0) ? -1 : time_out;
+
+                if(father->alarm_next_run.prev != NULL){
+                    father->alarm_next_run.prev->next = father->alarm_next_run.next;
+                    if(father->alarm_next_run.next != NULL){
+                        father->alarm_next_run.next->prev = father->alarm_next_run.prev;
+                        father->alarm_next_run.next->diff_tick += father->alarm_next_run.diff_tick; // 应该不会溢出
+                        father->alarm_next_run.next = NULL;
+                    }
+                    father->alarm_next_run.prev = NULL;
+                }
+
+                while(pAlarm->next != NULL){
+                    if((pAlarm->next->diff_tick + tick_add) > time_out){
+                        father->alarm_next_run.diff_tick = time_out - tick_add;
+                        pAlarm->next->diff_tick -= father->alarm_next_run.diff_tick;
+
+                        father->alarm_next_run.prev = pAlarm;
+                        father->alarm_next_run.next = pAlarm->next;
+                        pAlarm->next = &father->alarm_next_run;
+                        father->alarm_next_run.next->prev = &father->alarm_next_run;
+
+                        _LTX_CRITICAL_OUTO();
+                        return ;
+                    }
+                    tick_add += pAlarm->next->diff_tick;
+
+                    pAlarm = pAlarm->next;
+                }
+
+                father->alarm_next_run.diff_tick = time_out - tick_add;
+                father->alarm_next_run.prev = pAlarm;
+                pAlarm->next = &father->alarm_next_run;
+
+            _LTX_CRITICAL_OUTO();
+        }
+    #else
+        father->topic_wait_for = topic;
+        ltx_Topic_subscribe(topic, &(father->subscriber_topic));
+
+        ltx_Alarm_add(&(father->alarm_next_run), time_out);
+    #endif
 }
 
 
@@ -97,6 +244,7 @@ uint8_t _co_subscriber_cb(void *param){
     ltx_Alarm_remove(&(pCo->alarm_next_run));
     // 取消订阅该事件
     ltx_Topic_unsubscribe(&(pCo->subscriber_topic));
+    pCo->topic_wait_for = NULL;
 
     // 调用回调
     return pCo->callback(pCo);
@@ -145,15 +293,105 @@ void ctx_coro_wake(struct coro_stu *co, TickType_t ticks){
         return ;
     }
     
+#if (ltx_cfg_CORE_NUM > 1)
+    // 多核下可能会有某个核暂停另一个核的任务
+    // 为了不出现暂停后又被后续代码激活的情况，此处判断标志位进一步保证真正暂停
+    _LTX_CRITICAL_INTO();
+    if(co->flag_is_paused){ // 被暂停
+        co->flag_is_paused = 0;
+
+        _LTX_CRITICAL_OUTO();
+        return ;
+    }else {
+        if(!ticks){ // 要求尽快执行
+            // ltx_Topic_publish(&(co->alarm_next_run.topic));
+                // 就绪标志位置 1
+                co->alarm_next_run.topic.state |= 0x01;
+                // 已经存在，不推入事件队列
+                if(co->alarm_next_run.topic.next != NULL || ltx_sys_topic_queue_tail == &co->alarm_next_run.topic){
+                    _LTX_CRITICAL_OUTO();
+                    return ;
+                }
+
+                ltx_sys_topic_queue_tail->next = &co->alarm_next_run.topic;
+                ltx_sys_topic_queue_tail = &co->alarm_next_run.topic;
+
+                _LTX_CRITICAL_OUTO();
+
+                _LTX_SET_SCHEDULE_FLAG();
+            return ;
+        }
+        if(co->topic_wait_for != NULL){
+            // ltx_Topic_subscribe(co->topic_wait_for, &(co->subscriber_topic));
+                if(co->subscriber_topic.prev != NULL){ // 已经订阅了某个话题，先取消订阅
+                    co->subscriber_topic.prev->next = co->subscriber_topic.next;
+                    if(co->subscriber_topic.next != NULL){
+                        co->subscriber_topic.next->prev = co->subscriber_topic.prev;
+                        // co->subscriber_topic.next = NULL;
+                    }
+                    // co->subscriber_topic.prev = NULL;
+                }
+
+                co->subscriber_topic.next = co->topic_wait_for->subscriber_head.next;
+                co->subscriber_topic.prev = &co->topic_wait_for->subscriber_head;
+                if(co->topic_wait_for->subscriber_head.next != NULL){
+                    co->topic_wait_for->subscriber_head.next->prev = &co->subscriber_topic;
+                }
+                co->topic_wait_for->subscriber_head.next = &co->subscriber_topic;
+        }
+        // 将协程的闹钟设置在一段时间后
+        // ltx_Alarm_add(&(co->alarm_next_run), ticks);
+            struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
+            TickType_t tick_add = 0;
+
+            // 为 0 则以最大值倒计时
+            ticks = (ticks == 0) ? -1 : ticks;
+
+            if(co->alarm_next_run.prev != NULL){
+                co->alarm_next_run.prev->next = co->alarm_next_run.next;
+                if(co->alarm_next_run.next != NULL){
+                    co->alarm_next_run.next->prev = co->alarm_next_run.prev;
+                    co->alarm_next_run.next->diff_tick += co->alarm_next_run.diff_tick; // 应该不会溢出
+                    co->alarm_next_run.next = NULL;
+                }
+                co->alarm_next_run.prev = NULL;
+            }
+
+            while(pAlarm->next != NULL){
+                if((pAlarm->next->diff_tick + tick_add) > ticks){
+                    co->alarm_next_run.diff_tick = ticks - tick_add;
+                    pAlarm->next->diff_tick -= co->alarm_next_run.diff_tick;
+
+                    co->alarm_next_run.prev = pAlarm;
+                    co->alarm_next_run.next = pAlarm->next;
+                    pAlarm->next = &co->alarm_next_run;
+                    co->alarm_next_run.next->prev = &co->alarm_next_run;
+
+                    _LTX_CRITICAL_OUTO();
+                    return ;
+                }
+                tick_add += pAlarm->next->diff_tick;
+
+                pAlarm = pAlarm->next;
+            }
+
+            co->alarm_next_run.diff_tick = ticks - tick_add;
+            co->alarm_next_run.prev = pAlarm;
+            pAlarm->next = &co->alarm_next_run;
+
+            _LTX_CRITICAL_OUTO();
+    }
+#else
     if(!ticks){ // 要求尽快执行
         ltx_Topic_publish(&(co->alarm_next_run.topic));
         return ;
     }
 
-    ltx_Alarm_add(&(co->alarm_next_run), ticks);
     if(co->topic_wait_for != NULL){
         ltx_Topic_subscribe(co->topic_wait_for, &(co->subscriber_topic));
     }
+    ltx_Alarm_add(&(co->alarm_next_run), ticks);
+#endif
 }
 
 
@@ -191,18 +429,48 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
     }
 }
 #else
-// todo
-// #error "这里还没适配多核"
 // 暂停 某协程任务 的执行，会遍历整条调用链，暂停最终的子协程
 void ctx_coro_pause(struct coro_stu *co){
+    _LTX_CRITICAL_INTO();
     while(co->son != NULL){
         co = co->son;
     }
-    ltx_Alarm_remove(&(co->alarm_next_run));
+    // 因为暂停和恢复发生在业务层，设计上不希望委托给 ltx，造成额外的引用开销。所以可能会出现例如：
+    // 函数A 准备 _await 函数B 时，因为需要先分配 B 的内存，才能把 A 的 son 指定为 B
+    // 此时 A 已经是准备暂停态，如果把 A 当做最后一个节点去暂停则没办法暂停 B，也就是这个任务最终不会被暂停。
+    // 并且更重要的是，外部如果在 A 暂停期间恢复 A，并且此时 B 也在运行，那么 A 就只能获取到错误的返回值
+    // 更危险的情况下，A 如果执行完毕释放了内存，此时 B 想要恢复 father 会使用到野指针
+    // 所以下面这个标志位的作用就是防止无法暂停任务的边界情况，需要至少 V0.10 版本的翻译脚本
+    co->flag_is_paused = 1;
+
+    // ltx_Alarm_remove(&(co->alarm_next_run));
+        // 移除可能已经就绪的 topic
+        co->alarm_next_run.topic.state &= (~0x01); // 就绪标志位清零
+
+        if(co->alarm_next_run.prev != NULL){ // 在活跃列表中
+            co->alarm_next_run.prev->next = co->alarm_next_run.next;
+            if(co->alarm_next_run.next != NULL){
+                co->alarm_next_run.next->prev = co->alarm_next_run.prev;
+                co->alarm_next_run.next->diff_tick += co->alarm_next_run.diff_tick; // 应该不会溢出
+                co->alarm_next_run.next = NULL;
+            }
+            co->alarm_next_run.prev = NULL;
+        }
     
     if(co->topic_wait_for != NULL){
-        ltx_Topic_unsubscribe(&(co->subscriber_topic));
+        // ltx_Topic_unsubscribe(&(co->subscriber_topic));
+            // 应该可以不用判断前继，暂时保留
+            if(co->subscriber_topic.prev != NULL){
+                co->subscriber_topic.prev->next = co->subscriber_topic.next;
+                
+                if(co->subscriber_topic.next != NULL){
+                    co->subscriber_topic.next->prev = co->subscriber_topic.prev;
+                    co->subscriber_topic.next = NULL;
+                }
+                co->subscriber_topic.prev = NULL;
+            }
     }
+    _LTX_CRITICAL_OUTO();
 }
 
 // 恢复 某协程任务 的执行，会遍历整条调用链，唤醒最终的子协程
@@ -211,19 +479,90 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
     if(co == NULL){
         return ;
     }
+
+    _LTX_CRITICAL_INTO();
     while(co->son != NULL){
         co = co->son;
     }
     
     if(!ticks){ // 要求尽快执行
-        ltx_Topic_publish(&(co->alarm_next_run.topic));
+        // ltx_Topic_publish(&(co->alarm_next_run.topic));
+        // 就绪标志位置 1
+        co->alarm_next_run.topic.state |= 0x01;
+        // 已经存在，不推入事件队列
+        if(co->alarm_next_run.topic.next != NULL || ltx_sys_topic_queue_tail == &co->alarm_next_run.topic){
+            _LTX_CRITICAL_OUTO();
+            return ;
+        }
+
+        ltx_sys_topic_queue_tail->next = &co->alarm_next_run.topic;
+        ltx_sys_topic_queue_tail = &co->alarm_next_run.topic;
+
+        _LTX_CRITICAL_OUTO();
+
+        _LTX_SET_SCHEDULE_FLAG();
+
         return ;
     }
 
-    ltx_Alarm_add(&(co->alarm_next_run), ticks);
+    // ltx_Alarm_add(&(co->alarm_next_run), ticks);
+        struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
+        TickType_t tick_add = 0;
+
+        // 为 0 则以最大值倒计时
+        ticks = (ticks == 0) ? -1 : ticks;
+
+        if(co->alarm_next_run.prev != NULL){
+            co->alarm_next_run.prev->next = co->alarm_next_run.next;
+            if(co->alarm_next_run.next != NULL){
+                co->alarm_next_run.next->prev = co->alarm_next_run.prev;
+                co->alarm_next_run.next->diff_tick += co->alarm_next_run.diff_tick; // 应该不会溢出
+                co->alarm_next_run.next = NULL;
+            }
+            co->alarm_next_run.prev = NULL;
+        }
+
+        while(pAlarm->next != NULL){
+            if((pAlarm->next->diff_tick + tick_add) > ticks){
+                co->alarm_next_run.diff_tick = ticks - tick_add;
+                pAlarm->next->diff_tick -= co->alarm_next_run.diff_tick;
+
+                co->alarm_next_run.prev = pAlarm;
+                co->alarm_next_run.next = pAlarm->next;
+                pAlarm->next = &co->alarm_next_run;
+                co->alarm_next_run.next->prev = &co->alarm_next_run;
+
+                goto label_after_alarm_add;
+            }
+            tick_add += pAlarm->next->diff_tick;
+
+            pAlarm = pAlarm->next;
+        }
+
+        co->alarm_next_run.diff_tick = ticks - tick_add;
+        co->alarm_next_run.prev = pAlarm;
+        pAlarm->next = &co->alarm_next_run;
+        
+label_after_alarm_add:
     if(co->topic_wait_for != NULL){
-        ltx_Topic_subscribe(co->topic_wait_for, &(co->subscriber_topic));
+        // ltx_Topic_subscribe(co->topic_wait_for, &(co->subscriber_topic));
+        if(co->subscriber_topic.prev != NULL){ // 已经订阅了某个话题，先取消订阅
+            co->subscriber_topic.prev->next = co->subscriber_topic.next;
+            if(co->subscriber_topic.next != NULL){
+                co->subscriber_topic.next->prev = co->subscriber_topic.prev;
+                // co->subscriber_topic.next = NULL;
+            }
+            // co->subscriber_topic.prev = NULL;
+        }
+
+        co->subscriber_topic.next = co->topic_wait_for->subscriber_head.next;
+        co->subscriber_topic.prev = &co->topic_wait_for->subscriber_head;
+        if(co->topic_wait_for->subscriber_head.next != NULL){
+            co->topic_wait_for->subscriber_head.next->prev = &co->subscriber_topic;
+        }
+        co->topic_wait_for->subscriber_head.next = &co->subscriber_topic;
     }
+    _LTX_CRITICAL_OUTO();
 }
 #endif
 

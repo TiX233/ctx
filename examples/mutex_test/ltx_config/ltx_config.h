@@ -78,6 +78,7 @@ typedef uint32_t TickType_t;
                                                             } \
                                                             pSubscriber->prev = NULL; \
                                                         } \
+                                                        pCo->topic_wait_for = NULL; \
                                                         callback_retval |= 0x02; \
                                                     } \
                                                 }while(0)

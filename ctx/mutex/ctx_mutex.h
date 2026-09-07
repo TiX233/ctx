@@ -2,12 +2,13 @@
  * @file ctx_mutex.h
  * @author realTiX
  * @brief ctx 配套 互斥锁 组件。依赖至少为 0.8 版本的 ctx。目前暂时不支持递归。
- * @version 0.4
+ * @version 0.5
  * @date 2026-07-30 (0.1，初步完成设计，仅支持两个任务竞争资源)
  *       2026-07-31 (0.2，支持多任务竞争资源)
  * 
  *       2026-09-05 (0.3，适配 ltx v4)
  *       2026-09-06 (0.4，修复 give 后互斥锁未上锁的 bug)
+ *       2026-09-07 (0.5，适配多核下任务暂停/恢复)
  * 
  * @copyright Copyright (c) 2026, realTiX
  * @license Apache-2.0

@@ -16,6 +16,7 @@ C 无栈协程 _async 源到源翻译器
 2026年 8月31日: V0.8, 增加 _var_frame/_var_local 关键字的识别，支持手动声明生命周期；增加局部变量翻译结果检查输出能力
 
 2026年 9月06日: V0.9, 更新 V2.1 版本翻译模板新增规则，增加 __ctx_customize_xxx 宏开关的创建
+2026年 9月07日: V0.10, 更新 V2.2 翻译规则，增加多核下暂停标记位
 
 用法: python coro_translater.py <input.c> [--line]
 输出：
@@ -1386,10 +1387,26 @@ def process(input_file, enable_line, debug_scope=False, debug_path=None, debug_s
         impl_lines.append("    // 运行/启动该任务")
         impl_lines.append("    co->step = 0;")
         impl_lines.append("    co->something = 0;")
+        impl_lines.append("    #if (ltx_cfg_CORE_NUM > 1)")
+        impl_lines.append("    co->flag_is_paused = 0;")
+        impl_lines.append("    #endif")
         impl_lines.append("    if(father != NULL){")
+        impl_lines.append("        #if (ltx_cfg_CORE_NUM == 1)")
         impl_lines.append("        father->son = co;")
         impl_lines.append("        // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数")
         impl_lines.append(f"        _cocb_{fn['name']}(co);")
+        impl_lines.append("        #else")
+        impl_lines.append("        _LTX_CRITICAL_INTO();")
+        impl_lines.append("        father->son = co;")
+        impl_lines.append("        // 如果是被另一颗核心暂停，那么不启动子协程。")
+        impl_lines.append("        if(father->flag_is_paused){")
+        impl_lines.append("            father->flag_is_paused = 0;")
+        impl_lines.append("            _LTX_CRITICAL_OUTO();")
+        impl_lines.append("            return co;")
+        impl_lines.append("        }")
+        impl_lines.append("        _LTX_CRITICAL_OUTO();")
+        impl_lines.append(f"        _cocb_{fn['name']}(co);")
+        impl_lines.append("        #endif")
         impl_lines.append("    }else {")
         impl_lines.append("        // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制")
         impl_lines.append("        ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒")

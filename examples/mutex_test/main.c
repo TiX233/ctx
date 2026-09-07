@@ -78,8 +78,23 @@ _async void task_3(void){
     _await delay_ticks(500);
     printf("task3 give mutex.(%d)\n", ltx_Sys_get_tick());
     _await ctx_mutex_give(&mutex_test);
-    printf("task3 exit.(%d)\n", ltx_Sys_get_tick());
+    printf("task3 try take again.(%d)\n", ltx_Sys_get_tick());
+
+    flag_is_time_out = _await ctx_mutex_take(&mutex_test, 100);
+    if(!flag_is_time_out){
+        
+        printf("task3 take mutex SUCCESS.(%d)\n", ltx_Sys_get_tick());
+
+        printf("task3 give mutex.(%d)\n", ltx_Sys_get_tick());
+        _await ctx_mutex_give(&mutex_test);
+        printf("task3 exit.(%d)\n", ltx_Sys_get_tick());
+        return ;
+    }
+    printf("task3 take mutex timeout, retry...(%d)\n", ltx_Sys_get_tick());
 }
+
+struct coro_stu *co2;
+struct coro_stu *co3;
 
 // ---------- 主线程（调度器 + 任务执行） ----------
 int main(void) {
@@ -95,8 +110,8 @@ int main(void) {
 
     // 启动异步任务
     _start_async(NULL, task_1);
-    _start_async(NULL, task_2);
-    _start_async(NULL, task_3);
+    co2 = _start_async(NULL, task_2);
+    co3 = _start_async(NULL, task_3);
 
     // 运行调度器
     ltx_Sys_scheduler(0);

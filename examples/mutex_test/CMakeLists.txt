@@ -16,7 +16,7 @@ file(GLOB PROJECT_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.c"
     "${CTX_DIR}/*.c"
     "${CTX_MUTEX_DIR}/*.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ltx/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ltx/*.c"
 )
 
 set(COMMON_C_FLAGS -Wall -g -O0)
@@ -24,7 +24,8 @@ set(COMMON_INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CTX_DIR}"
     "${CTX_MUTEX_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ltx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ltx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ltx_config"
 )
 
 set(MAIN_OBJECTS)
@@ -37,7 +38,7 @@ foreach(source IN LISTS PROJECT_SOURCES)
         OUTPUT "${object_file}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
         COMMAND "${Python3_EXECUTABLE}" "${CTX_DIR}/coro_translater.py" "${source}"
-        COMMAND "${CMAKE_C_COMPILER}" ${COMMON_C_FLAGS} "-I${CMAKE_CURRENT_SOURCE_DIR}" "-I${CTX_DIR}" "-I${CTX_MUTEX_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/ltx" -c "${source}" -o "${object_file}"
+        COMMAND "${CMAKE_C_COMPILER}" ${COMMON_C_FLAGS} "-I${CMAKE_CURRENT_SOURCE_DIR}" "-I${CTX_DIR}" "-I${CTX_MUTEX_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/../ltx" "-I${CMAKE_CURRENT_SOURCE_DIR}/ltx_config" -c "${source}" -o "${object_file}"
         DEPENDS "${source}" "${CTX_DIR}/coro_translater.py"
         COMMENT "Compiling ${source} with coro preprocessing"
         VERBATIM

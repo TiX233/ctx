@@ -140,10 +140,26 @@ struct coro_stu* _co_task_1(struct coro_stu *father, struct coro_stu *co) {
     // 运行/启动该任务
     co->step = 0;
     co->something = 0;
+    #if (ltx_cfg_CORE_NUM > 1)
+    co->flag_is_paused = 0;
+    #endif
     if(father != NULL){
+        #if (ltx_cfg_CORE_NUM == 1)
         father->son = co;
         // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
         _cocb_task_1(co);
+        #else
+        _LTX_CRITICAL_INTO();
+        father->son = co;
+        // 如果是被另一颗核心暂停，那么不启动子协程。
+        if(father->flag_is_paused){
+            father->flag_is_paused = 0;
+            _LTX_CRITICAL_OUTO();
+            return co;
+        }
+        _LTX_CRITICAL_OUTO();
+        _cocb_task_1(co);
+        #endif
     }else {
         // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
         ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
@@ -306,10 +322,26 @@ struct coro_stu* _co_task_2(struct coro_stu *father, struct coro_stu *co) {
     // 运行/启动该任务
     co->step = 0;
     co->something = 0;
+    #if (ltx_cfg_CORE_NUM > 1)
+    co->flag_is_paused = 0;
+    #endif
     if(father != NULL){
+        #if (ltx_cfg_CORE_NUM == 1)
         father->son = co;
         // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
         _cocb_task_2(co);
+        #else
+        _LTX_CRITICAL_INTO();
+        father->son = co;
+        // 如果是被另一颗核心暂停，那么不启动子协程。
+        if(father->flag_is_paused){
+            father->flag_is_paused = 0;
+            _LTX_CRITICAL_OUTO();
+            return co;
+        }
+        _LTX_CRITICAL_OUTO();
+        _cocb_task_2(co);
+        #endif
     }else {
         // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
         ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
@@ -324,7 +356,7 @@ struct coro_stu* _co_task_2(struct coro_stu *father, struct coro_stu *co) {
  * 函数名称: task_3
  * 返回类型: void
  * 起始行号: 61
- * 终止行号: 81
+ * 终止行号: 93
  * 
  * 参数: 
  *       (无)
@@ -333,8 +365,8 @@ struct coro_stu* _co_task_2(struct coro_stu *father, struct coro_stu *co) {
  *           uint8_t flag_is_time_out
  * 
  * 局部变量作用域详情: 
- *   异步关键字捕获行号: 65, 70, 78, 80
- *   uint8_t flag_is_time_out: 作用范围=(63, 75], 跨越出让点=True
+ *   异步关键字捕获行号: 65, 70, 78, 80, 83, 89
+ *   uint8_t flag_is_time_out: 作用范围=(63, 84], 跨越出让点=True
  */
 
 // ======== 翻译后的函数体 ========
@@ -346,6 +378,8 @@ uint8_t _cocb_task_3(struct coro_stu *co) {
         case 2: goto _colabel_2;
         case 3: goto _colabel_3;
         case 4: goto _colabel_4;
+        case 5: goto _colabel_5;
+        case 6: goto _colabel_6;
     }
 
 
@@ -428,7 +462,57 @@ _colabel_4:
     co->son = NULL;
     /* END: 检测到 _await 关键字，替换 */
 
-    printf("task3 exit.(%d)\n", ltx_Sys_get_tick());
+    printf("task3 try take again.(%d)\n", ltx_Sys_get_tick());
+
+
+
+    /* BEGIN: 检测到 _await 关键字，替换 */
+    co->step = 5;
+    _co_ctx_mutex_take(co, NULL, &mutex_test, 100);
+    return 0; // 出让
+_colabel_5:
+    #ifndef __ctx_customize_retval_ctx_mutex_take
+    _prv_data->flag_is_time_out = ((struct _coval_ctx_mutex_take *)(co->son->prv_data))->_coretval_;
+    #else
+    _prv_data->flag_is_time_out = __ctx_customize_retval_ctx_mutex_take(co);
+    #endif
+    #ifndef __ctx_customize_no_free_ctx_mutex_take
+    // free 子协程对象
+    ctx_mem_data_free(co->son->prv_data);
+    ctx_mem_free(co->son);
+    #endif
+    co->son = NULL;
+    /* END: 检测到 _await 关键字，替换 */
+
+    if(!_prv_data->flag_is_time_out){
+        
+        printf("task3 take mutex SUCCESS.(%d)\n", ltx_Sys_get_tick());
+
+        printf("task3 give mutex.(%d)\n", ltx_Sys_get_tick());
+
+
+        /* BEGIN: 检测到 _await 关键字，替换 */
+        co->step = 6;
+        _co_ctx_mutex_give(co, NULL, &mutex_test);
+        return 0; // 出让
+_colabel_6:
+        /* 用户未接收返回值 */
+        #ifndef __ctx_customize_no_free_ctx_mutex_give
+        // free 子协程对象
+        ctx_mem_data_free(co->son->prv_data);
+        ctx_mem_free(co->son);
+        #endif
+        co->son = NULL;
+        /* END: 检测到 _await 关键字，替换 */
+
+        printf("task3 exit.(%d)\n", ltx_Sys_get_tick());
+
+        /* BEGIN: 检测到用户 return，替换 */
+        goto _colabel_end;
+        /* END: 检测到用户 return，替换 */
+
+    }
+    printf("task3 take mutex timeout, retry...(%d)\n", ltx_Sys_get_tick());
 _colabel_end:
     // co->step = 0; // 复位状态机
     if(co->father == NULL){ // 没有父协程则自己 free 自己
@@ -472,10 +556,26 @@ struct coro_stu* _co_task_3(struct coro_stu *father, struct coro_stu *co) {
     // 运行/启动该任务
     co->step = 0;
     co->something = 0;
+    #if (ltx_cfg_CORE_NUM > 1)
+    co->flag_is_paused = 0;
+    #endif
     if(father != NULL){
+        #if (ltx_cfg_CORE_NUM == 1)
         father->son = co;
         // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
         _cocb_task_3(co);
+        #else
+        _LTX_CRITICAL_INTO();
+        father->son = co;
+        // 如果是被另一颗核心暂停，那么不启动子协程。
+        if(father->flag_is_paused){
+            father->flag_is_paused = 0;
+            _LTX_CRITICAL_OUTO();
+            return co;
+        }
+        _LTX_CRITICAL_OUTO();
+        _cocb_task_3(co);
+        #endif
     }else {
         // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
         ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒

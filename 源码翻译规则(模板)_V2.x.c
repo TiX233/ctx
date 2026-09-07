@@ -1,12 +1,15 @@
 // 新版（V2）与旧版（V1）的区别：
-//     1、业务上兼容旧版，也就是基本不需要修改业务代码
-//     2、减少了一层函数调用，减少了不必要的重复传参，提高运行效率
-//     3、_start_async 宏现在可以获取返回值（struct coro_stu*）了，也就是动态创建的任务可以获取到句柄，便于业务控制
+//      1、业务上兼容旧版，也就是基本不需要修改业务代码
+//      2、减少了一层函数调用，减少了不必要的重复传参，提高运行效率
+//      3、_start_async 宏现在可以获取返回值（struct coro_stu*）了，也就是动态创建的任务可以获取到句柄，便于业务控制
 // 
 // V2.1 更新内容：2026年9月6日
-//     增加用户自定义返回值宏(__ctx_customize_retval_被调用函数名)。用于在不大改 ctx 以及不增加额外开销的情况下适配 ltx V4 多核支持
-//     增加用户自定义 _await 后是否释放子对象内存宏(__ctx_customize_no_free_被调用函数名)。用于拉满内置组件性能，不建议用户使用
-//     适配 ltx v4 回调返回值
+//      增加用户自定义返回值宏(__ctx_customize_retval_被调用函数名)。用于在不大改 ctx 以及不增加额外开销的情况下适配 ltx V4 多核支持
+//      增加用户自定义 _await 后是否释放子对象内存宏(__ctx_customize_no_free_被调用函数名)。用于拉满内置组件性能，不建议用户使用
+//      适配 ltx v4 回调返回值
+//
+// V2.2 更新内容：2026年9月7日
+//      增加多核下暂停/恢复任务标志位
 
 
 // _async 函数样例：
@@ -201,10 +204,28 @@ struct coro_stu* _co_函数名(struct coro_stu *father, struct coro_stu *co, 函
 
     // 运行/启动该任务
     co->step = 0;
+    co->something = 0;
+    #if (ltx_cfg_CORE_NUM > 1)
+    co->flag_is_paused = 0;
+    #endif
     if(father != NULL){
+        #if (ltx_cfg_CORE_NUM == 1)
         father->son = co;
         // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
         _cocb_函数名(co);
+        #else
+        _LTX_CRITICAL_INTO();
+        father->son = co;
+        // 如果是被另一颗核心暂停，那么不启动子协程。
+        if(father->flag_is_paused){
+            father->flag_is_paused = 0;
+            _LTX_CRITICAL_OUTO();
+            return co;
+        }
+        _LTX_CRITICAL_OUTO();
+
+        _cocb_函数名(co);
+        #endif
     }else {
         // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
         ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
