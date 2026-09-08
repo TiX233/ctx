@@ -15,7 +15,7 @@ CmakeLists.txt 是 ai 生成的
 
 ### 1、移植 ltx 调度器
 
-打开 ltx 文件夹下的 `ltx_config.h`
+打开 ltx_config 文件夹下的 `ltx_config.h`
 
 ![架构选择](./pic/ltx架构选择.png)
 

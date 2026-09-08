@@ -5,6 +5,10 @@
 
 /* ------------------- 系统时钟单位 tick 数据类型 ------------------- */
 typedef uint32_t TickType_t;
+// 最大延时
+#define LTX_MAX_TICK                    (0xFFFFFFFF-1)
+// 无限延时，如果设置闹钟时给的是这个那么就不会将闹钟加入闹钟链表
+#define LTX_INFINITE_TICK               (0xFFFFFFFF)
 
 /* ------------------------- 核心/线程 数量 ------------------------- */
 #define ltx_cfg_CORE_NUM                2

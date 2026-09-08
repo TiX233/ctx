@@ -38,11 +38,28 @@ struct ltx_Alarm_stu ltx_sys_alarm_list = {
 void ltx_Alarm_add(struct ltx_Alarm_stu *alarm, TickType_t tick_count_down){
     struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
     TickType_t tick_add = 0;
+    #ifdef ltx_cfg_USE_TICKLESS
+        TickType_t tick_recent = 0;
+        uint8_t flag_need_set_schedule = 0; // 把设置调度信号放到临界区外，提高拓展性
+    #endif
 
     // 为 0 则以最大值倒计时
-    tick_count_down = (tick_count_down == 0) ? -1 : tick_count_down;
+    if(tick_count_down == 0){
+        tick_count_down = LTX_MAX_TICK;
+    }else if(tick_count_down == LTX_INFINITE_TICK){ // 无限则不加入闹钟链表
+        return ;
+    }
 
     _LTX_CRITICAL_INTO();
+
+    // 获取此时最近的闹钟的倒计时，如果新闹钟比它更近，那么通知调度器重新计算休眠时间
+    #ifdef ltx_cfg_USE_TICKLESS
+        if(ltx_sys_alarm_list.next == NULL){
+            flag_need_set_schedule = 1;
+        }else {
+            tick_recent = ltx_sys_alarm_list.next->diff_tick;
+        }
+    #endif
 
     // 已经存在，移除重新倒计时，O(1)
     if(alarm->prev != NULL){
@@ -68,8 +85,7 @@ void ltx_Alarm_add(struct ltx_Alarm_stu *alarm, TickType_t tick_count_down){
             pAlarm->next = alarm;
             alarm->next->prev = alarm;
 
-            _LTX_CRITICAL_OUTO();
-            return ;
+            goto label_alarm_add_over;
         }
         tick_add += pAlarm->next->diff_tick;
 
@@ -80,7 +96,21 @@ void ltx_Alarm_add(struct ltx_Alarm_stu *alarm, TickType_t tick_count_down){
     alarm->prev = pAlarm;
     pAlarm->next = alarm;
 
+label_alarm_add_over:
+
+    #ifdef ltx_cfg_USE_TICKLESS
+        if(ltx_sys_alarm_list.next->diff_tick < tick_recent){
+            flag_need_set_schedule = 1;
+        }
+    #endif
+
     _LTX_CRITICAL_OUTO();
+    
+    #ifdef ltx_cfg_USE_TICKLESS
+        if(flag_need_set_schedule){
+            _LTX_SET_SCHEDULE_FLAG();
+        }
+    #endif
 }
 
 void ltx_Alarm_remove(struct ltx_Alarm_stu *alarm){
@@ -207,11 +237,11 @@ void ltx_Topic_publish_high_priority(struct ltx_Topic_stu *topic){
 #if (ltx_cfg_SYSTICK_TYPE == SYSTICK_TYPE_INTERRUPT)
 // 系统嘀嗒，由 systick/硬件定时器 中断服务函数调用
 void ltx_Sys_tick_tack(void){
-
-    real_ticks ++;
-
+    uint8_t flag_need_set_schedule = 0;
+    
     // O(1)
     _LTX_CRITICAL_INTO();
+    real_ticks ++;
 
     // struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
     struct ltx_Alarm_stu *pAlarm_next = ltx_sys_alarm_list.next; // 在移除闹钟时暂存它的 next 指针
@@ -224,7 +254,7 @@ void ltx_Sys_tick_tack(void){
             if(!(pAlarm_next->topic.next != NULL || ltx_sys_topic_queue_tail == &(pAlarm_next->topic))){ // 不存在于话题队列，推入
                 ltx_sys_topic_queue_tail->next = &(pAlarm_next->topic);
                 ltx_sys_topic_queue_tail = &(pAlarm_next->topic);
-                _LTX_SET_SCHEDULE_FLAG();
+                flag_need_set_schedule = 1;
             }
             // 移除这个闹钟
             ltx_sys_alarm_list.next = pAlarm_next->next;
@@ -244,7 +274,7 @@ void ltx_Sys_tick_tack(void){
                         if(!(pAlarm_next->topic.next != NULL || ltx_sys_topic_queue_tail == &(pAlarm_next->topic))){ // 不存在于话题队列，推入
                             ltx_sys_topic_queue_tail->next = &(pAlarm_next->topic);
                             ltx_sys_topic_queue_tail = &(pAlarm_next->topic);
-                            _LTX_SET_SCHEDULE_FLAG();
+                            flag_need_set_schedule = 1;
                         }
                         // 移除这个闹钟
                         ltx_sys_alarm_list.next = pAlarm_next->next;
@@ -263,6 +293,10 @@ void ltx_Sys_tick_tack(void){
     }
     
     _LTX_CRITICAL_OUTO();
+    
+    if(flag_need_set_schedule){
+        _LTX_SET_SCHEDULE_FLAG();
+    }
 }
 #endif
 
@@ -363,7 +397,7 @@ void ltx_Sys_scheduler(uint8_t core_id){ // 似乎甚至可以调度器里面跑
             }
 
             // 回调执行完成后，占有标志位清零
-            if(callback_retval != 1){ // 用户没有释放 topic 的内存才能操作这个标志位，否则会访问野指针
+            if(!callback_retval){ // 用户没有释放 topic 的内存才能操作这个标志位，否则会访问野指针
                 pTopic_real_head->state &= (~0x02);
             }
 
@@ -432,9 +466,15 @@ void ltx_Sys_scheduler(uint8_t core_id){
                 }
             }
         }
+        // todo：
+        // 此时链表中没有任务，并且在临界区内，所以可以计算可休眠时间，也就是最近一个闹钟的倒计时
         _LTX_CRITICAL_OUTO();
+        // 出临界区后，这个值可以给用户去操作硬件定时器
+        // 或者如果调度器跑在 rtos 的一个线程，那么可以设置为等待信号量的超时时间，并且配置发布话题的启动调度信号为发送信号量
+        // 不需要担心出临界区后又有中断添加了一个新的更近的闹钟，导致睡眠超时。
+        // 因为添加闹钟的 api 会在里面判断是否更近，是那就立即发送一次调度信号，那么调度器就会立即唤醒再次计算最近的闹钟倒计时
 
-#ifdef ltx_cfg_USE_IDLE_HOOK
+#ifdef ltx_cfg_USE_IDLE_SLEEP
         // 进入空闲钩子
         ltx_Hook_idle_in(core_id);
 #endif

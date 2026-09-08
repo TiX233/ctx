@@ -119,6 +119,28 @@ void _co_ctx_mutex_take(struct coro_stu *father, struct coro_stu *co, struct ctx
         // ltx_Alarm_add(&(father->alarm_next_run), time_out);
             struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
             TickType_t tick_add = 0;
+            #ifdef ltx_cfg_USE_TICKLESS
+                TickType_t tick_recent = 0;
+                uint8_t flag_need_set_schedule = 0; // 把设置调度信号放到临界区外，提高拓展性
+            #endif
+
+            // 为 0 则以最大值倒计时
+            if(time_out == 0){
+                time_out = LTX_MAX_TICK;
+            }else if(time_out == LTX_INFINITE_TICK){ // 无限则不加入闹钟链表
+                goto label_alarm_add_over;
+            }
+
+            _LTX_CRITICAL_INTO();
+
+            // 获取此时最近的闹钟的倒计时，如果新闹钟比它更近，那么通知调度器重新计算休眠时间
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(ltx_sys_alarm_list.next == NULL){
+                    flag_need_set_schedule = 1;
+                }else {
+                    tick_recent = ltx_sys_alarm_list.next->diff_tick;
+                }
+            #endif
 
             // 为 0 则以最大值倒计时
             time_out = (time_out == 0) ? -1 : time_out;
@@ -143,8 +165,7 @@ void _co_ctx_mutex_take(struct coro_stu *father, struct coro_stu *co, struct ctx
                     pAlarm->next = &father->alarm_next_run;
                     father->alarm_next_run.next->prev = &father->alarm_next_run;
 
-                    _LTX_CRITICAL_OUTO();
-                    return ;
+                    goto label_alarm_add_over;
                 }
                 tick_add += pAlarm->next->diff_tick;
 
@@ -154,7 +175,21 @@ void _co_ctx_mutex_take(struct coro_stu *father, struct coro_stu *co, struct ctx
             father->alarm_next_run.diff_tick = time_out - tick_add;
             father->alarm_next_run.prev = pAlarm;
             pAlarm->next = &father->alarm_next_run;
-        _LTX_CRITICAL_OUTO();
+
+label_alarm_add_over:
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(ltx_sys_alarm_list.next->diff_tick < tick_recent){
+                    flag_need_set_schedule = 1;
+                }
+            #endif
+
+            _LTX_CRITICAL_OUTO();
+            
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(flag_need_set_schedule){
+                    _LTX_SET_SCHEDULE_FLAG();
+                }
+            #endif
     #else
         ltx_Alarm_add(&(father->alarm_next_run), time_out);
     #endif
@@ -165,6 +200,8 @@ void _co_ctx_mutex_give(struct coro_stu *father, struct coro_stu *co, struct ctx
     
     // father->son = &__son_placeholder__;
     // father->topic_wait_for = NULL;
+
+    uint8_t flag_need_schedule = 0;
 
     _LTX_CRITICAL_INTO();
 
@@ -226,7 +263,7 @@ void _co_ctx_mutex_give(struct coro_stu *father, struct coro_stu *co, struct ctx
                 ltx_sys_topic_queue_tail->next = &mutex->topic;
                 ltx_sys_topic_queue_tail = &mutex->topic;
 
-                _LTX_SET_SCHEDULE_FLAG();
+                flag_need_schedule = 1;
             }
     }else {
         mutex->flag_is_locked = 0;
@@ -238,6 +275,10 @@ void _co_ctx_mutex_give(struct coro_stu *father, struct coro_stu *co, struct ctx
         
         _LTX_CRITICAL_OUTO();
 
+        if(flag_need_schedule){
+            _LTX_SET_SCHEDULE_FLAG();
+        }
+
         return ;
     }
     // ltx_Topic_publish(&(father->alarm_next_run.topic));
@@ -246,6 +287,10 @@ void _co_ctx_mutex_give(struct coro_stu *father, struct coro_stu *co, struct ctx
         // 已经存在，不推入事件队列
         if(father->alarm_next_run.topic.next != NULL || ltx_sys_topic_queue_tail == &father->alarm_next_run.topic){
             _LTX_CRITICAL_OUTO();
+            
+            if(flag_need_schedule){
+                _LTX_SET_SCHEDULE_FLAG();
+            }
             return ;
         }
 

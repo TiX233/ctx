@@ -66,9 +66,26 @@ void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ti
         // ltx_Alarm_add(&(father->alarm_next_run), ticks);
             struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
             TickType_t tick_add = 0;
+            #ifdef ltx_cfg_USE_TICKLESS
+                TickType_t tick_recent = 0;
+                uint8_t flag_need_set_schedule = 0; // 把设置调度信号放到临界区外，提高拓展性
+            #endif
 
             // 为 0 则以最大值倒计时
-            ticks = (ticks == 0) ? -1 : ticks;
+            if(ticks == 0){
+                ticks = LTX_MAX_TICK;
+            }else if(ticks == LTX_INFINITE_TICK){ // 无限则不加入闹钟链表
+                goto label_alarm_add_over;
+            }
+
+            // 获取此时最近的闹钟的倒计时，如果新闹钟比它更近，那么通知调度器重新计算休眠时间
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(ltx_sys_alarm_list.next == NULL){
+                    flag_need_set_schedule = 1;
+                }else {
+                    tick_recent = ltx_sys_alarm_list.next->diff_tick;
+                }
+            #endif
 
             if(father->alarm_next_run.prev != NULL){
                 father->alarm_next_run.prev->next = father->alarm_next_run.next;
@@ -90,8 +107,7 @@ void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ti
                     pAlarm->next = &father->alarm_next_run;
                     father->alarm_next_run.next->prev = &father->alarm_next_run;
 
-                    _LTX_CRITICAL_OUTO();
-                    return ;
+                    goto label_alarm_add_over;
                 }
                 tick_add += pAlarm->next->diff_tick;
 
@@ -102,7 +118,20 @@ void _co_delay_ticks(struct coro_stu *father, struct coro_stu *co, TickType_t ti
             father->alarm_next_run.prev = pAlarm;
             pAlarm->next = &father->alarm_next_run;
 
+label_alarm_add_over:
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(ltx_sys_alarm_list.next->diff_tick < tick_recent){
+                    flag_need_set_schedule = 1;
+                }
+            #endif
+
             _LTX_CRITICAL_OUTO();
+            
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(flag_need_set_schedule){
+                    _LTX_SET_SCHEDULE_FLAG();
+                }
+            #endif
     }
 #else
     if(!ticks){ // 要求尽快执行
@@ -129,6 +158,7 @@ void _co_wait_topic(struct coro_stu *father, struct coro_stu *co, struct ltx_Top
         // 多核下可能会有某个核暂停另一个核的任务
         // 为了不出现暂停后又被后续代码激活的情况，此处判断标志位进一步保证真正暂停
         _LTX_CRITICAL_INTO();
+
         if(father->flag_is_paused){
             father->flag_is_paused = 0;
 
@@ -155,9 +185,26 @@ void _co_wait_topic(struct coro_stu *father, struct coro_stu *co, struct ltx_Top
             // ltx_Alarm_add(&(father->alarm_next_run), time_out);
                 struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
                 TickType_t tick_add = 0;
+                #ifdef ltx_cfg_USE_TICKLESS
+                    TickType_t tick_recent = 0;
+                    uint8_t flag_need_set_schedule = 0; // 把设置调度信号放到临界区外，提高拓展性
+                #endif
 
                 // 为 0 则以最大值倒计时
-                time_out = (time_out == 0) ? -1 : time_out;
+                if(time_out == 0){
+                    time_out = LTX_MAX_TICK;
+                }else if(time_out == LTX_INFINITE_TICK){ // 无限则不加入闹钟链表
+                    goto label_alarm_add_over;
+                }
+
+                // 获取此时最近的闹钟的倒计时，如果新闹钟比它更近，那么通知调度器重新计算休眠时间
+                #ifdef ltx_cfg_USE_TICKLESS
+                    if(ltx_sys_alarm_list.next == NULL){
+                        flag_need_set_schedule = 1;
+                    }else {
+                        tick_recent = ltx_sys_alarm_list.next->diff_tick;
+                    }
+                #endif
 
                 if(father->alarm_next_run.prev != NULL){
                     father->alarm_next_run.prev->next = father->alarm_next_run.next;
@@ -179,8 +226,7 @@ void _co_wait_topic(struct coro_stu *father, struct coro_stu *co, struct ltx_Top
                         pAlarm->next = &father->alarm_next_run;
                         father->alarm_next_run.next->prev = &father->alarm_next_run;
 
-                        _LTX_CRITICAL_OUTO();
-                        return ;
+                        goto label_alarm_add_over;
                     }
                     tick_add += pAlarm->next->diff_tick;
 
@@ -191,7 +237,20 @@ void _co_wait_topic(struct coro_stu *father, struct coro_stu *co, struct ltx_Top
                 father->alarm_next_run.prev = pAlarm;
                 pAlarm->next = &father->alarm_next_run;
 
-            _LTX_CRITICAL_OUTO();
+label_alarm_add_over:
+                #ifdef ltx_cfg_USE_TICKLESS
+                    if(ltx_sys_alarm_list.next->diff_tick < tick_recent){
+                        flag_need_set_schedule = 1;
+                    }
+                #endif
+
+                _LTX_CRITICAL_OUTO();
+                
+                #ifdef ltx_cfg_USE_TICKLESS
+                    if(flag_need_set_schedule){
+                        _LTX_SET_SCHEDULE_FLAG();
+                    }
+                #endif
         }
     #else
         father->topic_wait_for = topic;
@@ -343,9 +402,26 @@ void ctx_coro_wake(struct coro_stu *co, TickType_t ticks){
         // ltx_Alarm_add(&(co->alarm_next_run), ticks);
             struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
             TickType_t tick_add = 0;
+            #ifdef ltx_cfg_USE_TICKLESS
+                TickType_t tick_recent = 0;
+                uint8_t flag_need_set_schedule = 0; // 把设置调度信号放到临界区外，提高拓展性
+            #endif
 
             // 为 0 则以最大值倒计时
-            ticks = (ticks == 0) ? -1 : ticks;
+            if(ticks == 0){
+                ticks = LTX_MAX_TICK;
+            }else if(ticks == LTX_INFINITE_TICK){ // 无限则不加入闹钟链表
+                goto label_alarm_add_over;
+            }
+
+            // 获取此时最近的闹钟的倒计时，如果新闹钟比它更近，那么通知调度器重新计算休眠时间
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(ltx_sys_alarm_list.next == NULL){
+                    flag_need_set_schedule = 1;
+                }else {
+                    tick_recent = ltx_sys_alarm_list.next->diff_tick;
+                }
+            #endif
 
             if(co->alarm_next_run.prev != NULL){
                 co->alarm_next_run.prev->next = co->alarm_next_run.next;
@@ -367,7 +443,7 @@ void ctx_coro_wake(struct coro_stu *co, TickType_t ticks){
                     pAlarm->next = &co->alarm_next_run;
                     co->alarm_next_run.next->prev = &co->alarm_next_run;
 
-                    _LTX_CRITICAL_OUTO();
+                    goto label_alarm_add_over;
                     return ;
                 }
                 tick_add += pAlarm->next->diff_tick;
@@ -379,7 +455,20 @@ void ctx_coro_wake(struct coro_stu *co, TickType_t ticks){
             co->alarm_next_run.prev = pAlarm;
             pAlarm->next = &co->alarm_next_run;
 
+label_alarm_add_over:
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(ltx_sys_alarm_list.next->diff_tick < tick_recent){
+                    flag_need_set_schedule = 1;
+                }
+            #endif
+
             _LTX_CRITICAL_OUTO();
+            
+            #ifdef ltx_cfg_USE_TICKLESS
+                if(flag_need_set_schedule){
+                    _LTX_SET_SCHEDULE_FLAG();
+                }
+            #endif
     }
 #else
     if(!ticks){ // 要求尽快执行
@@ -508,9 +597,28 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
     // ltx_Alarm_add(&(co->alarm_next_run), ticks);
         struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
         TickType_t tick_add = 0;
+        #ifdef ltx_cfg_USE_TICKLESS
+            TickType_t tick_recent = 0;
+            uint8_t flag_need_set_schedule = 0; // 把设置调度信号放到临界区外，提高拓展性
+        #endif
 
         // 为 0 则以最大值倒计时
-        ticks = (ticks == 0) ? -1 : ticks;
+        if(ticks == 0){
+            ticks = LTX_MAX_TICK;
+        }else if(ticks == LTX_INFINITE_TICK){ // 无限则不加入闹钟链表
+            goto label_alarm_add_over;
+        }
+
+        _LTX_CRITICAL_INTO();
+
+        // 获取此时最近的闹钟的倒计时，如果新闹钟比它更近，那么通知调度器重新计算休眠时间
+        #ifdef ltx_cfg_USE_TICKLESS
+            if(ltx_sys_alarm_list.next == NULL){
+                flag_need_set_schedule = 1;
+            }else {
+                tick_recent = ltx_sys_alarm_list.next->diff_tick;
+            }
+        #endif
 
         if(co->alarm_next_run.prev != NULL){
             co->alarm_next_run.prev->next = co->alarm_next_run.next;
@@ -532,7 +640,7 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
                 pAlarm->next = &co->alarm_next_run;
                 co->alarm_next_run.next->prev = &co->alarm_next_run;
 
-                goto label_after_alarm_add;
+                goto label_alarm_add_over;
             }
             tick_add += pAlarm->next->diff_tick;
 
@@ -543,7 +651,14 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
         co->alarm_next_run.prev = pAlarm;
         pAlarm->next = &co->alarm_next_run;
         
-label_after_alarm_add:
+label_alarm_add_over:
+
+        #ifdef ltx_cfg_USE_TICKLESS
+            if(ltx_sys_alarm_list.next->diff_tick < tick_recent){
+                flag_need_set_schedule = 1;
+            }
+        #endif
+
     if(co->topic_wait_for != NULL){
         // ltx_Topic_subscribe(co->topic_wait_for, &(co->subscriber_topic));
         if(co->subscriber_topic.prev != NULL){ // 已经订阅了某个话题，先取消订阅
@@ -563,6 +678,12 @@ label_after_alarm_add:
         co->topic_wait_for->subscriber_head.next = &co->subscriber_topic;
     }
     _LTX_CRITICAL_OUTO();
+
+    #ifdef ltx_cfg_USE_TICKLESS
+        if(flag_need_set_schedule){
+            _LTX_SET_SCHEDULE_FLAG();
+        }
+    #endif
 }
 #endif
 

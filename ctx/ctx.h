@@ -2,7 +2,7 @@
  * @file ctx.h
  * @author realTiX
  * @brief c 无栈协程管理器，需要搭配 coro_translater.py 做源到源翻译使用，目前暂时与 ltx 调度器紧耦合
- * @version 0.9
+ * @version 0.10
  * @date 2026-06-28 (0.1, 初步完成设计)
  *       2026-06-29 (0.2, 补充内存分配的判断；修复 delay 用错对象的 bug)
  *       2026-06-30 (0.3, 启动调度器管理的协程可以动态创建了；增加对整条异步任务链的启停管理)
@@ -13,6 +13,7 @@
  * 
  *       2026-09-05 (0.8, 增加 __ctx_customize 宏拉满内置组件性能，且用于适配 ltx V4 多核。一定要使用 V0.9 及以上版本的翻译脚本！)
  *       2026-09-07 (0.9, 完成多核下暂停与恢复任务的 api，需要 V0.10 及以上版本的翻译脚本；修复 sub 回调没有清除 topic_wait_for 的 bug)
+ *       2026-09-08 (0.10, 配合 ltx 增加多核下启动调度信号置于临界区外以及 tickless 适配)
  * 
  * @copyright Copyright (c) 2026, realTiX
  * @license Apache-2.0
