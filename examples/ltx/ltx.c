@@ -293,7 +293,7 @@ void ltx_Sys_tick_tack(void){
     }
     
     _LTX_CRITICAL_OUTO();
-    
+
     if(flag_need_set_schedule){
         _LTX_SET_SCHEDULE_FLAG();
     }
@@ -321,8 +321,13 @@ void ltx_Sys_scheduler(uint8_t core_id){ // 似乎甚至可以调度器里面跑
     struct ltx_Topic_subscriber_stu *pSubscriber;
     struct ltx_Topic_subscriber_stu *pSubscriber_next;
     uint8_t callback_retval;
+    
+    #ifdef ltx_cfg_USE_TICKLESS
+        TickType_t recent_ticks;
+    #endif
 
     while(1){
+        label_pop_head:
         // 不断弹出话题队列第一个节点
         _LTX_CRITICAL_INTO();
 
@@ -354,15 +359,21 @@ void ltx_Sys_scheduler(uint8_t core_id){ // 似乎甚至可以调度器里面跑
                 case 0x03: // 正在被另一颗核心处理中，且被重复推入，绕过它弹出下个可用事件，避免回调重入
 
                     if(pTopic_real_head->next == NULL){ // 如果后面没有了，那就尝试从头遍历
+                        _LTX_CRITICAL_OUTO();
                         // 从头遍历
-                        pTopic_real_head = ltx_sys_topic_queue.next;
+                        // pTopic_real_head = ltx_sys_topic_queue.next;
                         pTopic_real_head_prev = &ltx_sys_topic_queue;
+                        // 如果事件队列中只有这一个任务，那么相当于只有另一个核处理完这颗核才能处理
+                        // 但是这里是临界区，这颗核会一直呆在临界区尝试弹出，一直响应不了中断，除非另一颗核心释放任务
+                        // 但是另一颗核的任务执行过程中有可能申请进入临界区，或者执行完后一定会申请进入临界区，那么就会发生死锁
+                        // 所以这里必须是先出临界区再进临界区才能从头遍历
+                        goto label_pop_head;
                     }else {
+                        // 继续遍历
                         pTopic_real_head_prev = pTopic_real_head;
                         pTopic_real_head = pTopic_real_head->next;
+                        continue;
                     }
-                    // 继续遍历
-                    continue;
 
                 case 0x01: // 正常弹出执行回调
                     pTopic_real_head->state = 0x02; // 占有
@@ -405,23 +416,28 @@ void ltx_Sys_scheduler(uint8_t core_id){ // 似乎甚至可以调度器里面跑
             pTopic_real_head = ltx_sys_topic_queue.next;
             pTopic_real_head_prev = &ltx_sys_topic_queue; // 设置为 pTopic_real_head 的前继
         }
-        // 时间戳调度，在事件队列空闲时判断是否有闹钟需要弹出
-        #if (ltx_cfg_SYSTICK_TYPE == SYSTICK_TYPE_TIMESTAMP)
-            TickType_t tick_now = ltx_Sys_get_tick();
-
-
+        #ifdef ltx_cfg_USE_TICKLESS
+            // 此时链表中没有任务，并且在临界区内，所以可以计算可休眠时间，也就是最近一个闹钟的倒计时
+            if(ltx_sys_alarm_list.next != NULL){
+                recent_ticks = ltx_sys_alarm_list.next->diff_tick;
+            }else {
+                recent_ticks = LTX_INFINITE_TICK;
+            }
         #endif
         _LTX_CRITICAL_OUTO();
-
-        #if (ltx_cfg_SYSTICK_TYPE == SYSTICK_TYPE_INTERRUPT)
-            
-        #elif (ltx_cfg_SYSTICK_TYPE == SYSTICK_TYPE_TIMESTAMP)
-            
-        #endif
-
-        #ifdef ltx_cfg_USE_IDLE_HOOK
+        // 出临界区后，这个值可以给用户去操作硬件定时器
+        // 或者如果调度器跑在 rtos 的一个线程，那么可以设置为等待信号量的超时时间，并且配置发布话题的启动调度信号为发送信号量
+        // 不需要担心出临界区后又有中断添加了一个新的更近的闹钟，导致睡眠超时。
+        // 因为添加闹钟的 api 会在里面判断是否更近，是那就立即发送一次调度信号，那么调度器就会立即唤醒再次计算最近的闹钟倒计时
+        
+        #ifdef ltx_cfg_USE_IDLE_SLEEP
             // 进入空闲钩子
-            ltx_Hook_idle_in(core_id);
+            #ifdef ltx_cfg_USE_TICKLESS
+                ltx_hook_idle_in(core_id, recent_ticks);
+            #else
+                // 没有开启 tickless 那么要求 systick 每个 tick 运行一次
+                ltx_hook_idle_in(core_id, 1);
+            #endif
         #endif
     }
 }
@@ -431,6 +447,10 @@ void ltx_Sys_scheduler(uint8_t core_id){
     struct ltx_Topic_stu *pTopic_real_head;
     struct ltx_Topic_subscriber_stu *pSubscriber;
     struct ltx_Topic_subscriber_stu *pSubscriber_next;
+
+    #ifdef ltx_cfg_USE_TICKLESS
+        TickType_t recent_ticks;
+    #endif
 
     while(1){
         // 不断弹出话题队列第一个节点
@@ -466,35 +486,29 @@ void ltx_Sys_scheduler(uint8_t core_id){
                 }
             }
         }
-        // todo：
-        // 此时链表中没有任务，并且在临界区内，所以可以计算可休眠时间，也就是最近一个闹钟的倒计时
+        #ifdef ltx_cfg_USE_TICKLESS
+            // 此时链表中没有任务，并且在临界区内，所以可以计算可休眠时间，也就是最近一个闹钟的倒计时
+            if(ltx_sys_alarm_list.next != NULL){
+                recent_ticks = ltx_sys_alarm_list.next->diff_tick;
+            }else {
+                recent_ticks = LTX_INFINITE_TICK;
+            }
+        #endif
         _LTX_CRITICAL_OUTO();
         // 出临界区后，这个值可以给用户去操作硬件定时器
         // 或者如果调度器跑在 rtos 的一个线程，那么可以设置为等待信号量的超时时间，并且配置发布话题的启动调度信号为发送信号量
         // 不需要担心出临界区后又有中断添加了一个新的更近的闹钟，导致睡眠超时。
         // 因为添加闹钟的 api 会在里面判断是否更近，是那就立即发送一次调度信号，那么调度器就会立即唤醒再次计算最近的闹钟倒计时
-
-#ifdef ltx_cfg_USE_IDLE_SLEEP
-        // 进入空闲钩子
-        ltx_Hook_idle_in(core_id);
-#endif
+        
+        #ifdef ltx_cfg_USE_IDLE_SLEEP
+            // 进入空闲钩子
+            #ifdef ltx_cfg_USE_TICKLESS
+                ltx_hook_idle_in(core_id, recent_ticks);
+            #else
+                // 没有开启 tickless 那么要求 systick 每个 tick 运行一次
+                ltx_hook_idle_in(core_id, 1);
+            #endif
+        #endif
     }
-}
-#endif
-
-
-#ifdef ltx_cfg_USE_IDLE_HOOK
-// 进入空闲的钩子函数，一般用于关闭一些系统功能或者休眠，没有特殊要求则保留一句 __WFE(); 或者什么都不干
-ltx_weak void ltx_Hook_idle_in(uint8_t core_id){
-    // 样例：
-
-    // 判断是否长期空闲，决定是否关闭 xx 外设
-
-    // cpu 休眠，等待事件唤醒
-    // __WFE();
-    // 或者如果调度器跑在 rtos 线程内的话，则等待信号量
-    // 获取空闲时的tick = ltx_Sys_get_tick();
-    // 是否信号量超时 = 获取信号量(&sem_ltx, 超时时间为最近的 alarm 触发的倒计时);
-    // if(获取空闲时的tick + 最近的 alarm 触发的倒计时 <= ltx_Sys_get_tick()) 总之就是是否弹出闹钟链表头节点
 }
 #endif

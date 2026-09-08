@@ -116,9 +116,9 @@ void ltx_Topic_publish(struct ltx_Topic_stu *topic);
 void ltx_Topic_publish_high_priority(struct ltx_Topic_stu *topic);
 
 
+#if (ltx_cfg_SYSTICK_TYPE == SYSTICK_TYPE_INTERRUPT)
 // 系统嘀嗒，由 systick/硬件定时器 中断服务函数调用
 void ltx_Sys_tick_tack(void);
-#if (ltx_cfg_SYSTICK_TYPE == SYSTICK_TYPE_INTERRUPT)
 // 获取系统自开机以来的 tick 计数，如果开了 tickless 或者改成时间戳调度，那么用户要把这个实现为自己平台的获取 tick 的函数
 TickType_t ltx_Sys_get_tick(void);
 #endif

@@ -7,6 +7,10 @@
 
 #include "main.c.coro.h"
 
+#ifdef ltx_cfg_USE_IDLE_SLEEP
+    HANDLE g_hSemaphore = NULL;
+#endif
+
 // 模拟 systick 服务函数
 DWORD WINAPI systick_thread(LPVOID param);
 
@@ -96,10 +100,21 @@ _async void task_3(void){
 struct coro_stu *co2;
 struct coro_stu *co3;
 
+// 另一个线程/核心
+DWORD WINAPI core_1_thread(LPVOID param);
+
 // ---------- 主线程（调度器 + 任务执行） ----------
 int main(void) {
     // 初始化临界区
     InitializeCriticalSection(&__g_spin_lock);
+    #ifdef ltx_cfg_USE_IDLE_SLEEP
+        // 开启空闲休眠则创建唤醒休眠信号量
+        g_hSemaphore = CreateSemaphore(NULL, 0, 1, NULL);
+        if (g_hSemaphore == NULL) {
+            printf("创建信号量失败，错误码: %ld\n", GetLastError());
+            return -1;
+        }
+    #endif
 
     // 创建 systick 中断，以高优先级线程形式创建
     HANDLE hTickThread = CreateThread(NULL, 0, systick_thread, NULL, 0, NULL);
@@ -113,14 +128,35 @@ int main(void) {
     co2 = _start_async(NULL, task_2);
     co3 = _start_async(NULL, task_3);
 
+    #if (ltx_cfg_CORE_NUM > 1)
+    // 创建另一个线程模拟多核
+    CreateThread(NULL, 0, core_1_thread, NULL, 0, NULL);
+    #endif
+
     // 运行调度器
     ltx_Sys_scheduler(0);
     // 后续代码不会被执行
 
     while(1);
 
+
     CloseHandle(hTickThread);
+    
+    #ifdef ltx_cfg_USE_IDLE_SLEEP
+        CloseHandle(g_hSemaphore);
+    #endif
+
     DeleteCriticalSection(&__g_spin_lock);
+    return 0;
+}
+
+// 另一个核
+DWORD WINAPI core_1_thread(LPVOID param){
+    (void)param;
+    
+    // 运行调度器
+    ltx_Sys_scheduler(1);
+    
     return 0;
 }
 
@@ -129,8 +165,9 @@ DWORD WINAPI systick_thread(LPVOID param){
     (void)param;
     while (1) {
         Sleep(10);                          // 10 ms 一次
-
+        // printf("----------------test(%d)\n", ltx_Sys_get_tick());
         ltx_Sys_tick_tack();
+        // printf("----------------test(%d)\n", ltx_Sys_get_tick());
     }
     return 0;
 }

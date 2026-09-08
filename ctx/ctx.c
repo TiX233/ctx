@@ -609,8 +609,6 @@ void ctx_coro_resume(struct coro_stu *co, TickType_t ticks){
             goto label_alarm_add_over;
         }
 
-        _LTX_CRITICAL_INTO();
-
         // 获取此时最近的闹钟的倒计时，如果新闹钟比它更近，那么通知调度器重新计算休眠时间
         #ifdef ltx_cfg_USE_TICKLESS
             if(ltx_sys_alarm_list.next == NULL){

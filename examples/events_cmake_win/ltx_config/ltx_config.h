@@ -18,7 +18,7 @@ typedef uint32_t TickType_t;
 // #define ltx_cfg_USE_IDLE_SLEEP
 
 // 需要 tickless 则打开此宏，前提是开启空闲休眠宏
-// V4 版本将不会由调度器操作硬件定时器，而是通过 ltx_Sys_set_next_weak 传递下次唤醒的时间，由外部决定唤醒信号发送时机
+// V4 版本将不会由调度器操作硬件定时器，而是通过 ltx_hook_idle_in 传递下次唤醒的时间，由外部决定唤醒信号发送时机
 // 开启 tickless 可能会影响实时性。
 // 感觉调度器层面 tickless 有点鸡肋，真要低功耗肯定是业务层面判断是否有待办然后决定关外设以及深度休眠
 // #define ltx_cfg_USE_TICKLESS
@@ -86,7 +86,11 @@ typedef uint32_t TickType_t;
                                                         callback_retval |= 0x02; \
                                                     } \
                                                 }while(0)
-    #define ltx_hook_after_user_call_back()
+    #define ltx_hook_after_user_call_back()     do{ \
+                                                    if(callback_retval&0x02){ \
+                                                        callback_retval = 0; \
+                                                    } \
+                                                }while(0)
 #else
     #define ltx_hook_before_user_call_back()
     #define ltx_hook_after_user_call_back()
