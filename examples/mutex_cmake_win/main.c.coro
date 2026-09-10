@@ -4,8 +4,8 @@
  * 识别到 _async 关键字
  * 函数名称: task_1
  * 返回类型: void
- * 起始行号: 20
- * 终止行号: 39
+ * 起始行号: 17
+ * 终止行号: 36
  * 
  * 参数: 
  *       (无)
@@ -14,8 +14,8 @@
  *           (无)
  * 
  * 局部变量作用域详情: 
- *   异步关键字捕获行号: 28, 36, 38
- *   uint8_t flag_is_time_out: 作用范围=(22, 33], 跨越出让点=False
+ *   异步关键字捕获行号: 25, 33, 35
+ *   uint8_t flag_is_time_out: 作用范围=(19, 30], 跨越出让点=False
  */
 
 // ======== 翻译后的函数体 ========
@@ -34,13 +34,13 @@ uint8_t _cocb_task_1(struct coro_stu *co) {
 
     printf("task1 running...(%d)\n", ltx_Sys_get_tick());
 
-    // 超时时间 100 ticks
+    // 超时时间 1000 ticks
     while(1){
 
 
         /* BEGIN: 检测到 _await 关键字，替换 */
         co->step = 1;
-        _co_ctx_mutex_take(co, NULL, &mutex_test, 100);
+        _co_ctx_mutex_take(co, NULL, &mutex_test, 1000);
         return 0; // 出让
 _colabel_1:
         #ifndef __ctx_customize_retval_ctx_mutex_take
@@ -67,7 +67,7 @@ _colabel_1:
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     co->step = 2;
-    _co_delay_ticks(co, NULL, 500);
+    _co_delay_ticks(co, NULL, 5000);
     return 0; // 出让
 _colabel_2:
     /* 用户未接收返回值 */
@@ -173,8 +173,8 @@ struct coro_stu* _co_task_1(struct coro_stu *father, struct coro_stu *co) {
  * 识别到 _async 关键字
  * 函数名称: task_2
  * 返回类型: void
- * 起始行号: 42
- * 终止行号: 62
+ * 起始行号: 39
+ * 终止行号: 59
  * 
  * 参数: 
  *       (无)
@@ -183,8 +183,8 @@ struct coro_stu* _co_task_1(struct coro_stu *father, struct coro_stu *co) {
  *           uint8_t flag_is_time_out
  * 
  * 局部变量作用域详情: 
- *   异步关键字捕获行号: 46, 51, 59, 61
- *   uint8_t flag_is_time_out: 作用范围=(44, 56], 跨越出让点=True
+ *   异步关键字捕获行号: 43, 48, 56, 58
+ *   uint8_t flag_is_time_out: 作用范围=(41, 53], 跨越出让点=True
  */
 
 // ======== 翻译后的函数体 ========
@@ -202,7 +202,7 @@ uint8_t _cocb_task_2(struct coro_stu *co) {
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     co->step = 1;
-    _co_delay_ticks(co, NULL, 10);
+    _co_delay_ticks(co, NULL, 100);
     return 0; // 出让
 _colabel_1:
     /* 用户未接收返回值 */
@@ -216,13 +216,13 @@ _colabel_1:
 
     printf("task2 running...(%d)\n", ltx_Sys_get_tick());
 
-    // 超时时间 100 ticks
+    // 超时时间 1000 ticks
     while(1){
 
 
         /* BEGIN: 检测到 _await 关键字，替换 */
         co->step = 2;
-        _co_ctx_mutex_take(co, NULL, &mutex_test, 100);
+        _co_ctx_mutex_take(co, NULL, &mutex_test, 1000);
         return 0; // 出让
 _colabel_2:
         #ifndef __ctx_customize_retval_ctx_mutex_take
@@ -249,7 +249,7 @@ _colabel_2:
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     co->step = 3;
-    _co_delay_ticks(co, NULL, 500);
+    _co_delay_ticks(co, NULL, 5000);
     return 0; // 出让
 _colabel_3:
     /* 用户未接收返回值 */
@@ -355,8 +355,8 @@ struct coro_stu* _co_task_2(struct coro_stu *father, struct coro_stu *co) {
  * 识别到 _async 关键字
  * 函数名称: task_3
  * 返回类型: void
- * 起始行号: 65
- * 终止行号: 97
+ * 起始行号: 62
+ * 终止行号: 94
  * 
  * 参数: 
  *       (无)
@@ -365,8 +365,8 @@ struct coro_stu* _co_task_2(struct coro_stu *father, struct coro_stu *co) {
  *           uint8_t flag_is_time_out
  * 
  * 局部变量作用域详情: 
- *   异步关键字捕获行号: 69, 74, 82, 84, 87, 93
- *   uint8_t flag_is_time_out: 作用范围=(67, 88], 跨越出让点=True
+ *   异步关键字捕获行号: 66, 71, 79, 81, 84, 90
+ *   uint8_t flag_is_time_out: 作用范围=(64, 85], 跨越出让点=True
  */
 
 // ======== 翻译后的函数体 ========
@@ -386,7 +386,7 @@ uint8_t _cocb_task_3(struct coro_stu *co) {
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     co->step = 1;
-    _co_delay_ticks(co, NULL, 20);
+    _co_delay_ticks(co, NULL, 200);
     return 0; // 出让
 _colabel_1:
     /* 用户未接收返回值 */
@@ -400,13 +400,13 @@ _colabel_1:
 
     printf("task3 running...(%d)\n", ltx_Sys_get_tick());
 
-    // 超时时间 100 ticks
+    // 超时时间 1000 ticks
     while(1){
 
 
         /* BEGIN: 检测到 _await 关键字，替换 */
         co->step = 2;
-        _co_ctx_mutex_take(co, NULL, &mutex_test, 100);
+        _co_ctx_mutex_take(co, NULL, &mutex_test, 1000);
         return 0; // 出让
 _colabel_2:
         #ifndef __ctx_customize_retval_ctx_mutex_take
@@ -433,7 +433,7 @@ _colabel_2:
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     co->step = 3;
-    _co_delay_ticks(co, NULL, 500);
+    _co_delay_ticks(co, NULL, 5000);
     return 0; // 出让
 _colabel_3:
     /* 用户未接收返回值 */

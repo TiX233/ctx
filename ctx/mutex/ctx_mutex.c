@@ -55,8 +55,9 @@ void _co_ctx_mutex_take(struct coro_stu *father, struct coro_stu *co, struct ctx
     // 这个函数并不是真正的 async 函数，只是对设置订阅与超时的一层封装
     // 为了避免内存管理出现问题，所以这里将它的子节点设置为占位符
     // father->son = &__son_placeholder__;
-
+    
     #if (ltx_cfg_CORE_NUM > 1)
+    TickType_t now_tick = ltx_Sys_get_tick();
     _LTX_CRITICAL_INTO();
     // 被另一个核暂停
     if(father->flag_is_paused){
@@ -74,8 +75,6 @@ void _co_ctx_mutex_take(struct coro_stu *father, struct coro_stu *co, struct ctx
         mutex->flag_is_locked = 1;
         #if (ltx_cfg_CORE_NUM > 1)
             // ltx_Topic_publish(&(father->alarm_next_run.topic));
-                // 就绪标志位置 1
-                father->alarm_next_run.topic.state |= 0x01;
                 // 已经存在，不推入事件队列
                 if(father->alarm_next_run.topic.next != NULL || ltx_sys_topic_queue_tail == &father->alarm_next_run.topic){
                     _LTX_CRITICAL_OUTO();
@@ -117,77 +116,13 @@ void _co_ctx_mutex_take(struct coro_stu *father, struct coro_stu *co, struct ctx
 
     #if (ltx_cfg_CORE_NUM > 1)
         // ltx_Alarm_add(&(father->alarm_next_run), time_out);
-            struct ltx_Alarm_stu *pAlarm = &(ltx_sys_alarm_list);
-            TickType_t tick_add = 0;
-            #ifdef ltx_cfg_USE_TICKLESS
-                TickType_t tick_recent = 0;
-                uint8_t flag_need_set_schedule = 0; // 把设置调度信号放到临界区外，提高拓展性
-            #endif
+        uint8_t flag_need_set_schedule = __ltx_MC_Alarm_add(&(father->alarm_next_run), time_out, now_tick);
 
-            // 为 0 则以最大值倒计时
-            if(time_out == 0){
-                time_out = LTX_MAX_TICK;
-            }else if(time_out == LTX_INFINITE_TICK){ // 无限则不加入闹钟链表
-                goto label_alarm_add_over;
-            }
+        _LTX_CRITICAL_OUTO();
 
-            // 获取此时最近的闹钟的倒计时，如果新闹钟比它更近，那么通知调度器重新计算休眠时间
-            #ifdef ltx_cfg_USE_TICKLESS
-                if(ltx_sys_alarm_list.next == NULL){
-                    flag_need_set_schedule = 1;
-                }else {
-                    tick_recent = ltx_sys_alarm_list.next->diff_tick;
-                }
-            #endif
-
-            // 为 0 则以最大值倒计时
-            time_out = (time_out == 0) ? -1 : time_out;
-
-            if(father->alarm_next_run.prev != NULL){
-                father->alarm_next_run.prev->next = father->alarm_next_run.next;
-                if(father->alarm_next_run.next != NULL){
-                    father->alarm_next_run.next->prev = father->alarm_next_run.prev;
-                    father->alarm_next_run.next->diff_tick += father->alarm_next_run.diff_tick; // 应该不会溢出
-                    father->alarm_next_run.next = NULL;
-                }
-                father->alarm_next_run.prev = NULL;
-            }
-
-            while(pAlarm->next != NULL){
-                if((pAlarm->next->diff_tick + tick_add) > time_out){
-                    father->alarm_next_run.diff_tick = time_out - tick_add;
-                    pAlarm->next->diff_tick -= father->alarm_next_run.diff_tick;
-
-                    father->alarm_next_run.prev = pAlarm;
-                    father->alarm_next_run.next = pAlarm->next;
-                    pAlarm->next = &father->alarm_next_run;
-                    father->alarm_next_run.next->prev = &father->alarm_next_run;
-
-                    goto label_alarm_add_over;
-                }
-                tick_add += pAlarm->next->diff_tick;
-
-                pAlarm = pAlarm->next;
-            }
-
-            father->alarm_next_run.diff_tick = time_out - tick_add;
-            father->alarm_next_run.prev = pAlarm;
-            pAlarm->next = &father->alarm_next_run;
-
-label_alarm_add_over:
-            #ifdef ltx_cfg_USE_TICKLESS
-                if(ltx_sys_alarm_list.next->diff_tick < tick_recent){
-                    flag_need_set_schedule = 1;
-                }
-            #endif
-
-            _LTX_CRITICAL_OUTO();
-            
-            #ifdef ltx_cfg_USE_TICKLESS
-                if(flag_need_set_schedule){
-                    _LTX_SET_SCHEDULE_FLAG();
-                }
-            #endif
+        if(flag_need_set_schedule){
+            _LTX_SET_SCHEDULE_FLAG();
+        }
     #else
         ltx_Alarm_add(&(father->alarm_next_run), time_out);
     #endif
@@ -222,18 +157,7 @@ void _co_ctx_mutex_give(struct coro_stu *father, struct coro_stu *co, struct ctx
         pCo->topic_wait_for = &mutex->topic;
         
         // ltx_Alarm_remove(&pCo->alarm_next_run);
-            // 移除可能已经就绪的 topic
-            pCo->alarm_next_run.topic.state &= (~0x01); // 就绪标志位清零
-
-            if(pCo->alarm_next_run.prev != NULL){ // 在活跃列表中
-                pCo->alarm_next_run.prev->next = pCo->alarm_next_run.next;
-                if(pCo->alarm_next_run.next != NULL){
-                    pCo->alarm_next_run.next->prev = pCo->alarm_next_run.prev;
-                    pCo->alarm_next_run.next->diff_tick += pCo->alarm_next_run.diff_tick; // 应该不会溢出
-                    pCo->alarm_next_run.next = NULL;
-                }
-                pCo->alarm_next_run.prev = NULL;
-            }
+        __ltx_MC_Alarm_remove(&pCo->alarm_next_run);
 
         // ltx_Topic_subscribe(&mutex->topic, first_sub);
             if(first_sub->prev != NULL){ // 已经订阅了某个话题，先取消订阅
@@ -254,8 +178,6 @@ void _co_ctx_mutex_give(struct coro_stu *father, struct coro_stu *co, struct ctx
 
         // 唤醒正在等待锁的第一个任务
         // ltx_Topic_publish(&mutex->topic);
-            // 就绪标志位置 1
-            mutex->topic.state |= 0x01;
             // 不存在则推入事件队列
             if(!(mutex->topic.next != NULL || ltx_sys_topic_queue_tail == &mutex->topic)){
                 ltx_sys_topic_queue_tail->next = &mutex->topic;
@@ -280,8 +202,6 @@ void _co_ctx_mutex_give(struct coro_stu *father, struct coro_stu *co, struct ctx
         return ;
     }
     // ltx_Topic_publish(&(father->alarm_next_run.topic));
-        // 就绪标志位置 1
-        father->alarm_next_run.topic.state |= 0x01;
         // 已经存在，不推入事件队列
         if(father->alarm_next_run.topic.next != NULL || ltx_sys_topic_queue_tail == &father->alarm_next_run.topic){
             _LTX_CRITICAL_OUTO();

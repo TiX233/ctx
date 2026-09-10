@@ -16,7 +16,7 @@
 而 `ctx.h` 中定义了这个宏定义为：
 
 ```c
-#define __ctx_customize_retval_wait_topic(co)   (co->topic_wait_for != NULL ? 1 : 0)
+#define __ctx_customize_retval_wait_topic(co)   (co->something ? 1 : 0); co->something = 0
 ```
 
 所以用户获取返回值将被替换成如下内容：
@@ -28,7 +28,6 @@
 也就是不会再从子对象获取数据了。因为 wait_topic 其实是对父对象内部的 topic 和 alarm 操作的一层封装，所以 son 用的是一个全局变量占位，虽然释放内存的时候会判断这个内存地址不属于内存池而不 free，但是还是有函数调用和出入临界区开销等，并且因为使用同一个全局变量占位，这样会导致多核下变量被修改。这里通过引入宏替换返回值解决了这个问题，不大改框架逻辑，也不用给 wait_topic 引入对象动态内存分配
 
 # 2、__ctx_customize_no_free_被调用函数名
-
 
 例如这里还通过配合如下宏定义让编译器不要编译 free 相关操作
 

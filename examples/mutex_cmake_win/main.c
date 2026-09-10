@@ -11,9 +11,6 @@
     HANDLE g_hSemaphore = NULL;
 #endif
 
-// 模拟 systick 服务函数
-DWORD WINAPI systick_thread(LPVOID param);
-
 // 测试用互斥锁
 struct ctx_mutex_stu mutex_test;
 
@@ -23,9 +20,9 @@ _async void task_1(void){
 
     printf("task1 running...(%d)\n", ltx_Sys_get_tick());
 
-    // 超时时间 100 ticks
+    // 超时时间 1000 ticks
     while(1){
-        flag_is_time_out = _await ctx_mutex_take(&mutex_test, 100);
+        flag_is_time_out = _await ctx_mutex_take(&mutex_test, 1000);
         if(!flag_is_time_out){
             break;
         }
@@ -33,7 +30,7 @@ _async void task_1(void){
     }
     
     printf("task1 take mutex SUCCESS.(%d)\n", ltx_Sys_get_tick());
-    _await delay_ticks(500);
+    _await delay_ticks(5000);
     printf("task1 give mutex.(%d)\n", ltx_Sys_get_tick());
     _await ctx_mutex_give(&mutex_test);
     printf("task1 exit.(%d)\n", ltx_Sys_get_tick());
@@ -43,12 +40,12 @@ _async void task_2(void){
     
     uint8_t flag_is_time_out;
 
-    _await delay_ticks(10);
+    _await delay_ticks(100);
     printf("task2 running...(%d)\n", ltx_Sys_get_tick());
 
-    // 超时时间 100 ticks
+    // 超时时间 1000 ticks
     while(1){
-        flag_is_time_out = _await ctx_mutex_take(&mutex_test, 100);
+        flag_is_time_out = _await ctx_mutex_take(&mutex_test, 1000);
         if(!flag_is_time_out){
             break;
         }
@@ -56,7 +53,7 @@ _async void task_2(void){
     }
     
     printf("task2 take mutex SUCCESS.(%d)\n", ltx_Sys_get_tick());
-    _await delay_ticks(500);
+    _await delay_ticks(5000);
     printf("task2 give mutex.(%d)\n", ltx_Sys_get_tick());
     _await ctx_mutex_give(&mutex_test);
     printf("task2 exit.(%d)\n", ltx_Sys_get_tick());
@@ -66,12 +63,12 @@ _async void task_3(void){
     
     uint8_t flag_is_time_out;
 
-    _await delay_ticks(20);
+    _await delay_ticks(200);
     printf("task3 running...(%d)\n", ltx_Sys_get_tick());
 
-    // 超时时间 100 ticks
+    // 超时时间 1000 ticks
     while(1){
-        flag_is_time_out = _await ctx_mutex_take(&mutex_test, 100);
+        flag_is_time_out = _await ctx_mutex_take(&mutex_test, 1000);
         if(!flag_is_time_out){
             break;
         }
@@ -79,7 +76,7 @@ _async void task_3(void){
     }
     
     printf("task3 take mutex SUCCESS.(%d)\n", ltx_Sys_get_tick());
-    _await delay_ticks(500);
+    _await delay_ticks(5000);
     printf("task3 give mutex.(%d)\n", ltx_Sys_get_tick());
     _await ctx_mutex_give(&mutex_test);
     printf("task3 try take again.(%d)\n", ltx_Sys_get_tick());
@@ -116,10 +113,6 @@ int main(void) {
         }
     #endif
 
-    // 创建 systick 中断，以高优先级线程形式创建
-    HANDLE hTickThread = CreateThread(NULL, 0, systick_thread, NULL, 0, NULL);
-    SetThreadPriority(hTickThread, THREAD_PRIORITY_TIME_CRITICAL); // 优先级比 main 高
-
     // 初始化内存池
     ctx_mem_pool_init();
 
@@ -138,9 +131,6 @@ int main(void) {
     // 后续代码不会被执行
 
     while(1);
-
-
-    CloseHandle(hTickThread);
     
     #ifdef ltx_cfg_USE_IDLE_SLEEP
         CloseHandle(g_hSemaphore);
@@ -157,18 +147,6 @@ DWORD WINAPI core_1_thread(LPVOID param){
     // 运行调度器
     ltx_Sys_scheduler(1);
     
-    return 0;
-}
-
-// 模拟 systick 定时中断
-DWORD WINAPI systick_thread(LPVOID param){
-    (void)param;
-    while (1) {
-        Sleep(10);                          // 10 ms 一次
-        // printf("----------------test(%d)\n", ltx_Sys_get_tick());
-        ltx_Sys_tick_tack();
-        // printf("----------------test(%d)\n", ltx_Sys_get_tick());
-    }
     return 0;
 }
 
