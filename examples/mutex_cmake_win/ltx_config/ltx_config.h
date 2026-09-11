@@ -14,9 +14,9 @@
 // 为什么闹钟节点不存储被触发的时间戳？因为如果时间戳溢出会导致闹钟链表顺序错乱
 typedef uint32_t TickType_t;
 // 最大延时
-#define LTX_MAX_TICK                    (0xFFFFFFFF-1)
+#define LTX_MAX_TICK                    (TickType_t)(-2)
 // 无限延时，如果设置闹钟时给的是这个那么就不会将闹钟加入闹钟链表
-#define LTX_INFINITE_TICK               (0xFFFFFFFF)
+#define LTX_INFINITE_TICK               (TickType_t)(-1)
 
 /* ------------------------- 核心/线程 数量 ------------------------- */
 #define ltx_cfg_CORE_NUM                2

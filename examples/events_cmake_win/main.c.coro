@@ -4,25 +4,25 @@
  * 识别到 _async 关键字
  * 函数名称: task_wait_events
  * 返回类型: void
- * 起始行号: 18
- * 终止行号: 27
+ * 起始行号: 19
+ * 终止行号: 34
  * 
  * 参数: 
  *       int task_id
  *       uint32_t events_wait_for
  *       TickType_t time_out
- *       uint8_t and_or
+ *       ctx_events_type_e and_or
  * 
  * 需要持久化的局部变量: 
  *           (无)
  * 
  * 局部变量作用域详情: 
- *   异步关键字捕获行号: 21
- *   uint32_t events_get: 作用范围=(21, 26], 跨越出让点=False
+ *   异步关键字捕获行号: 22
+ *   uint32_t events_get: 作用范围=(22, 33], 跨越出让点=False
  */
 
 // ======== 翻译后的函数体 ========
-void _cocb_task_wait_events(struct coro_stu *co) {
+uint8_t _cocb_task_wait_events(struct coro_stu *co) {
     struct _coval_task_wait_events *_prv_data = (struct _coval_task_wait_events *)co->prv_data;
 
     switch(co->step){
@@ -31,40 +31,55 @@ void _cocb_task_wait_events(struct coro_stu *co) {
 
 
     
-    printf("Task %d start, wait for 0x%08X(%s) in %d ticks.\n", _prv_data->task_id, _prv_data->events_wait_for, _prv_data->and_or?"OR":"AND", _prv_data->time_out);
+    printf("Task %d start, wait for 0x%08X(%s) in %d ticks.\n", _prv_data->task_id, _prv_data->events_wait_for, _prv_data->and_or?"AND":"OR", _prv_data->time_out);
 
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     co->step = 1;
     _co_ctx_wait_events(co, NULL, &events_test, _prv_data->time_out, _prv_data->events_wait_for, _prv_data->and_or);
-    return ; // 出让
+    return 0; // 出让
 _colabel_1:
+    #ifndef __ctx_customize_retval_ctx_wait_events
     ;
     uint32_t events_get = ((struct _coval_ctx_wait_events *)(co->son->prv_data))->_coretval_;
+    #else
+    ;
+    uint32_t events_get = __ctx_customize_retval_ctx_wait_events(co);
+    #endif
+    #ifndef __ctx_customize_no_free_ctx_wait_events
     // free 子协程对象
     ctx_mem_data_free(co->son->prv_data);
     ctx_mem_free(co->son);
+    #endif
     co->son = NULL;
     /* END: 检测到 _await 关键字，替换 */
 
     if(ctx_Events_is_timeout(events_get)){
         // 超时
-        printf("Task %d wait events timeout, now events: 0x%08X\n", _prv_data->task_id, events_get);
+        if(_prv_data->and_or == CTX_EVENTS_TYPE_OR)
+            printf("Task %d wait events timeout, get events: 0x%08X\n", _prv_data->task_id, events_get);
+        else
+            printf("Task %d wait events timeout, get events: 0x%08X\n", _prv_data->task_id, _prv_data->events_wait_for & (~events_get));
     }else {
-        printf("Task %d wait events Okay: 0x%08X\n", _prv_data->task_id, events_get);
+        if(_prv_data->and_or == CTX_EVENTS_TYPE_OR)
+            printf("Task %d wait events Okay, get events: 0x%08X\n", _prv_data->task_id, events_get);
+        else
+            printf("Task %d wait events Okay, get events: 0x%08X\n", _prv_data->task_id, _prv_data->events_wait_for & (~events_get));
     }
 _colabel_end:
     // co->step = 0; // 复位状态机
     if(co->father == NULL){ // 没有父协程则自己 free 自己
         ctx_mem_data_free(co->prv_data);
         ctx_mem_free(co);
+        return 1;
     }else {
         // 唤醒父协程
         ctx_coro_wake(co->father, 0); // 0 代表 0 tick 后唤醒
+        return 0;
     }
 }
 
-struct coro_stu* _co_task_wait_events(struct coro_stu *father, struct coro_stu *co, int task_id, uint32_t events_wait_for, TickType_t time_out, uint8_t and_or) {
+struct coro_stu* _co_task_wait_events(struct coro_stu *father, struct coro_stu *co, int task_id, uint32_t events_wait_for, TickType_t time_out, ctx_events_type_e and_or) {
     struct _coval_task_wait_events *_prv_data;
 
     // 如果传进来的对象是空，那么代表外界期望动态创建这个协程的对象
@@ -96,10 +111,27 @@ struct coro_stu* _co_task_wait_events(struct coro_stu *father, struct coro_stu *
 
     // 运行/启动该任务
     co->step = 0;
+    co->something = 0;
+    #if (ltx_cfg_CORE_NUM > 1)
+    co->flag_is_paused = 0;
+    #endif
     if(father != NULL){
+        #if (ltx_cfg_CORE_NUM == 1)
         father->son = co;
         // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
         _cocb_task_wait_events(co);
+        #else
+        _LTX_CRITICAL_INTO();
+        father->son = co;
+        // 如果是被另一颗核心暂停，那么不启动子协程。
+        if(father->flag_is_paused){
+            father->flag_is_paused = 0;
+            _LTX_CRITICAL_OUTO();
+            return co;
+        }
+        _LTX_CRITICAL_OUTO();
+        _cocb_task_wait_events(co);
+        #endif
     }else {
         // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
         ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒
@@ -113,8 +145,8 @@ struct coro_stu* _co_task_wait_events(struct coro_stu *father, struct coro_stu *
  * 识别到 _async 关键字
  * 函数名称: task_events_publisher
  * 返回类型: void
- * 起始行号: 31
- * 终止行号: 40
+ * 起始行号: 38
+ * 终止行号: 47
  * 
  * 参数: 
  *       (无)
@@ -123,11 +155,11 @@ struct coro_stu* _co_task_wait_events(struct coro_stu *father, struct coro_stu *
  *           (无)
  * 
  * 局部变量作用域详情: 
- *   异步关键字捕获行号: 33, 38
+ *   异步关键字捕获行号: 40, 45
  */
 
 // ======== 翻译后的函数体 ========
-void _cocb_task_events_publisher(struct coro_stu *co) {
+uint8_t _cocb_task_events_publisher(struct coro_stu *co) {
     struct _coval_task_events_publisher *_prv_data = (struct _coval_task_events_publisher *)co->prv_data;
 
     switch(co->step){
@@ -139,13 +171,15 @@ void _cocb_task_events_publisher(struct coro_stu *co) {
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     co->step = 1;
-    _co_delay_ticks(co, NULL, 200);
-    return ; // 出让
+    _co_delay_ticks(co, NULL, 2000);
+    return 0; // 出让
 _colabel_1:
     /* 用户未接收返回值 */
+    #ifndef __ctx_customize_no_free_delay_ticks
     // free 子协程对象
     ctx_mem_data_free(co->son->prv_data);
     ctx_mem_free(co->son);
+    #endif
     co->son = NULL;
     /* END: 检测到 _await 关键字，替换 */
 
@@ -155,13 +189,15 @@ _colabel_1:
 
     /* BEGIN: 检测到 _await 关键字，替换 */
     co->step = 2;
-    _co_delay_ticks(co, NULL, 200);
-    return ; // 出让
+    _co_delay_ticks(co, NULL, 2000);
+    return 0; // 出让
 _colabel_2:
     /* 用户未接收返回值 */
+    #ifndef __ctx_customize_no_free_delay_ticks
     // free 子协程对象
     ctx_mem_data_free(co->son->prv_data);
     ctx_mem_free(co->son);
+    #endif
     co->son = NULL;
     /* END: 检测到 _await 关键字，替换 */
 
@@ -172,9 +208,11 @@ _colabel_end:
     if(co->father == NULL){ // 没有父协程则自己 free 自己
         ctx_mem_data_free(co->prv_data);
         ctx_mem_free(co);
+        return 1;
     }else {
         // 唤醒父协程
         ctx_coro_wake(co->father, 0); // 0 代表 0 tick 后唤醒
+        return 0;
     }
 }
 
@@ -207,10 +245,27 @@ struct coro_stu* _co_task_events_publisher(struct coro_stu *father, struct coro_
 
     // 运行/启动该任务
     co->step = 0;
+    co->something = 0;
+    #if (ltx_cfg_CORE_NUM > 1)
+    co->flag_is_paused = 0;
+    #endif
     if(father != NULL){
+        #if (ltx_cfg_CORE_NUM == 1)
         father->son = co;
         // 如果是 _async 函数使用 _await/_await_static 调用，那么就地运行到出让点，不必等调度器调度，减少调度切换次数
         _cocb_task_events_publisher(co);
+        #else
+        _LTX_CRITICAL_INTO();
+        father->son = co;
+        // 如果是被另一颗核心暂停，那么不启动子协程。
+        if(father->flag_is_paused){
+            father->flag_is_paused = 0;
+            _LTX_CRITICAL_OUTO();
+            return co;
+        }
+        _LTX_CRITICAL_OUTO();
+        _cocb_task_events_publisher(co);
+        #endif
     }else {
         // 如果是非 _async 函数调用 _start_async 创建异步任务，那么不立即执行内容，而是等调度器调度，利于业务启停控制
         ctx_coro_wake(co, 0); // 0 代表 0 tick 后唤醒，也就是告诉调度器尽快唤醒

@@ -25,9 +25,12 @@ CmakeLists.txt 是 ai 生成的
 
 ![开关中断](./pic/开关中断宏.jpg)
 
-然后将 `ltx_Sys_tick_tack` 函数放在系统嘀嗒中断服务函数内
+然后将提供您平台的获取时间戳 `ltx_Sys_get_tick` 宏
 
-![tick](./pic/系统嘀嗒.png)
+```c
+// 系统时间戳获取，需要注意，win 下毫秒时间戳会有十几毫秒误差，所以有些时候闹钟的响应不会那么准，这不是 ltx 的问题
+#define ltx_Sys_get_tick()                  (TickType_t)GetTickCount()
+```
 
 最后将调度器 `ltx_Sys_scheduler` 函数放在 main 函数最后
 

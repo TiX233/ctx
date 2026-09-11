@@ -14,7 +14,7 @@ extern spin_type_t __g_spin_lock;
 
 #define ltx_cfg_USE_SPIN_LOCK
 
-// 系统时间戳获取
+// 系统时间戳获取，需要注意，win 下毫秒时间戳会有十几毫秒误差，所以有些时候闹钟的响应不会那么准，这不是 ltx 的问题
 #define ltx_Sys_get_tick()                  (TickType_t)GetTickCount()
 
 // 空闲休眠相关配置

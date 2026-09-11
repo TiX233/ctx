@@ -14,17 +14,17 @@
 // 为什么闹钟节点不存储被触发的时间戳？因为如果时间戳溢出会导致闹钟链表顺序错乱
 typedef uint32_t TickType_t;
 // 最大延时
-#define LTX_MAX_TICK                    (0xFFFFFFFF-1)
+#define LTX_MAX_TICK                    (TickType_t)(-2)
 // 无限延时，如果设置闹钟时给的是这个那么就不会将闹钟加入闹钟链表
-#define LTX_INFINITE_TICK               (0xFFFFFFFF)
+#define LTX_INFINITE_TICK               (TickType_t)(-1)
 
 /* ------------------------- 核心/线程 数量 ------------------------- */
-#define ltx_cfg_CORE_NUM                2
+#define ltx_cfg_CORE_NUM               1
 
 /* ------------------- 空闲休眠与 tickless 开关宏 ------------------- */
 // 需要空闲休眠则打开此宏，不打开则事件循环将不断尝试弹出事件队列头，打开后会进入用户实现的休眠回调
 // V4 版本将不会由调度器操作硬件定时器，而是通过 ltx_hook_idle_in 传递下次唤醒的时间，由外部决定唤醒信号发送时机
-#define ltx_cfg_USE_IDLE_SLEEP
+// #define ltx_cfg_USE_IDLE_SLEEP
 
 /* ------------------- 选择一个对应架构的配置文件 ------------------- */
 #include "ltx_arch_wintest.h"
@@ -87,8 +87,6 @@ typedef uint32_t TickType_t;
 #ifndef ltx_cfg_USE_IDLE_SLEEP
     // 设置调度标志位，表示需要进行调度，可配置为 发布 rtos 信号量、产生 cpu 唤醒事件 等等
     #define _LTX_SET_SCHEDULE_FLAG()    do{}while(0)
-    // 清除调度标志位
-    // #define _LTX_CLEAR_SCHEDULE_FLAG()  do{}while(0)
 #endif
 
 // 编译器相关宏定义，偷自 rtthread
